@@ -1211,6 +1211,7 @@ class PanelPerfiles(QWidget):
         raiz.addWidget(self.aviso)
 
         tarjeta = Tarjeta("Perfiles",
+                          "El que lleva ⬢ es el que manda ahora. "
                           "Selecciona uno y pulsa Aplicar, o haz doble clic. "
                           "Cada perfil es un fichero TOML en "
                           f"{self.almacen.dir}, editable a mano.")
@@ -1269,11 +1270,15 @@ class PanelPerfiles(QWidget):
 
         self.lista.clear()
         for p in self.almacen.lista():
+            # El azul de la lista es la SELECCIÓN, no el perfil que manda: son
+            # dos cosas distintas y se leían como una. El que manda lleva el
+            # mismo símbolo que la pastilla de la cabecera, para que se vea que
+            # hablan de lo mismo.
             marcas = []
+            if p.id == activo:
+                marcas.append("manda ahora")
             if p.por_defecto:
                 marcas.append("por defecto")
-            if p.id == activo:
-                marcas.append("activo ahora")
             ajustes = p.ajustes.campos()
             resumen = ", ".join(
                 f"{'DPI' if k == 'dpi' else 'Hz'} {v}" for k, v in ajustes.items()) or "sin ajustes"
@@ -1286,7 +1291,7 @@ class PanelPerfiles(QWidget):
             detalle = resumen + (f"  ·  {', '.join(juegos)}" if juegos else "")
             if marcas:
                 detalle += f"  ·  {' · '.join(marcas)}"
-            item = QListWidgetItem(p.nombre)
+            item = QListWidgetItem(("⬢  " if p.id == activo else "     ") + p.nombre)
             item.setData(ROL_SUB, detalle)
             item.setData(ROL_DATOS, p.id)
             self.lista.addItem(item)

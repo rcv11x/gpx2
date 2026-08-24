@@ -122,6 +122,8 @@ class PaginaRaton(QWidget):
         pestañas.addTab(_envolver(self._tab_sensibilidad()), "Sensibilidad")
         pestañas.addTab(_envolver(self._tab_rendimiento()), "Rendimiento")
         pestañas.addTab(_envolver(self._tab_botones()), "Botones")
+        if self.raton.onboard is not None:
+            pestañas.addTab(_envolver(self._tab_memoria()), "Memoria del ratón")
         pestañas.addTab(_envolver(self._tab_perfiles()), "Perfiles")
         pestañas.addTab(_envolver(self._tab_firmware()), "Firmware")
         pestañas.addTab(_envolver(self._tab_diagnostico()), "Diagnóstico")
@@ -343,21 +345,14 @@ class PaginaRaton(QWidget):
             t = Tarjeta("Tasa de reporte",
                         "Este ratón no permite ajustar la tasa de reporte.")
 
-        t2 = Tarjeta("Modo de funcionamiento",
-                     "Mientras los perfiles onboard estén activos, el firmware "
-                     "reimpone su DPI y su tasa de reporte, y lo que ajustes aquí "
-                     "no llega a aplicarse. Los perfiles por juego necesitan modo host.")
-        if self.raton.onboard is not None:
-            self.lbl_modo = QLabel(self.estado.get("onboard") or "?")
-            t2.añadir(self.lbl_modo)
-            btn_modo = QPushButton()
-            self._pintar_boton_modo(btn_modo)
-            btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
-            t2.añadir(btn_modo)
-        else:
-            t2.añadir(QLabel(self.estado.get("mode")
-                             or "Este ratón no informa de en qué modo está."))
-        return _columna(t, t2)
+        if self.raton.onboard is None:
+            t2 = Tarjeta("Modo de funcionamiento",
+                         self.estado.get("mode")
+                         or "Este ratón no informa de en qué modo está.")
+            return _columna(t, t2)
+        # Con memoria de perfiles, el modo vive en su propia pestaña: es lo que
+        # decide si el ratón usa esa memoria o le hacemos caso a nosotros.
+        return _columna(t)
 
     def _pintar_boton_modo(self, btn: QPushButton) -> None:
         try:
@@ -366,6 +361,172 @@ class PaginaRaton(QWidget):
             btn.setText("Cambiar de modo")
             return
         btn.setText("Volver a modo onboard" if en_host else "Cambiar a modo host")
+
+    # -- memoria del ratón ----------------------------------------------------
+
+    def _tab_memoria(self) -> QWidget:
+        """Lo que el ratón guarda por su cuenta, y que sobrevive a apagarlo."""
+        from .. import onboard as ob_mod
+
+        cap = self.raton.onboard
+        self._perfil_ob = None
+        self._combos_boton = []
+
+        cabecera = Tarjeta(
+            "Memoria del ratón",
+            "Tu ratón guarda dentro sus propios ajustes: la sensibilidad, la "
+            "tasa de reporte y lo que hace cada botón. Eso sobrevive a apagarlo "
+            "y funciona en cualquier ordenador, sin este programa ni ningún otro.")
+
+        try:
+            crudo = cap.leer_sector(1)
+            perfil = ob_mod.leer_perfil(crudo, cap.num_botones)
+        except Exception as e:
+            cabecera.añadir(QLabel(f"No se pudo leer: {e}"))
+            return _columna(cabecera)
+        if crudo is None:
+            cabecera.añadir(QLabel("No se pudo leer la memoria de perfiles."))
+            return _columna(cabecera)
+        self._perfil_ob = perfil
+        self._sector_ob = crudo
+
+        cabecera.añadir(QLabel(
+            f"Guardado ahora mismo: {perfil.tasa_hz} Hz, "
+            f"{perfil.dpi_por_defecto} DPI al encender, y "
+            f"{len(perfil.niveles)} niveles de sensibilidad "
+            f"({', '.join(str(n.x) for n in perfil.niveles)})."))
+
+        # -- modo ------------------------------------------------------------
+        t_modo = Tarjeta(
+            "Quién manda ahora mismo",
+            "En modo onboard manda el ratón con lo que tiene guardado, y "
+            "funciona igual en cualquier sitio. En modo host mandamos nosotros: "
+            "se puede cambiar la sensibilidad al vuelo y los perfiles cambian "
+            "solos al arrancar un juego, pero nada de eso sobrevive a apagarlo.")
+        self.lbl_modo = QLabel(self.estado.get("onboard") or "?")
+        t_modo.añadir(self.lbl_modo)
+        btn_modo = QPushButton()
+        self._pintar_boton_modo(btn_modo)
+        btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
+        t_modo.añadir(btn_modo)
+
+        # -- botones ----------------------------------------------------------
+        t_bot = Tarjeta(
+            "Botones",
+            "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
+            "modo onboard: en modo host manda el firmware y estos ajustes no se "
+            "aplican.")
+        for i, b in enumerate(perfil.botones):
+            fila = QWidget()
+            lay = QHBoxLayout(fila)
+            lay.setContentsMargins(0, 0, 0, 0)
+            etiqueta = QLabel(f"Botón {i + 1}")
+            etiqueta.setMinimumWidth(90)
+            lay.addWidget(etiqueta)
+            combo = QComboBox()
+            actual = ob_mod.describir_boton(b)
+            for nombre in ob_mod.ACCIONES:
+                combo.addItem(nombre, nombre)
+            if actual not in ob_mod.ACCIONES:
+                # Algo que sabemos leer pero no ofrecer: se enseña y no se pierde.
+                combo.addItem(actual, None)
+            combo.setCurrentText(actual)
+            lay.addWidget(combo, 1)
+            t_bot.añadir(fila)
+            self._combos_boton.append(combo)
+
+        btn_bot = QPushButton("Guardar los botones en el ratón")
+        btn_bot.clicked.connect(self._guardar_botones)
+        t_bot.añadir(btn_bot)
+
+        # -- guardar los ajustes de ahora --------------------------------------
+        dpi = self.estado.get("dpi")
+        rate = self.estado.get("rate")
+        t_guardar = Tarjeta(
+            "Guardar los ajustes actuales",
+            "Escribe en el ratón lo que tienes puesto ahora, para que lo "
+            "conserve al apagarlo y lo lleve consigo a otro ordenador.")
+        detalle = []
+        if dpi:
+            detalle.append(f"{dpi.actual} DPI")
+        if rate:
+            detalle.append(f"{rate.actual_hz} Hz")
+        t_guardar.añadir(QLabel(
+            "Se guardaría: " + (", ".join(detalle) if detalle else "nada") + "."))
+        aviso = QLabel(
+            "La memoria del ratón admite un número limitado de escrituras, así "
+            "que conviene guardar cuando tengas los ajustes como los quieres, "
+            "no en cada prueba.")
+        aviso.setObjectName("Suave")
+        aviso.setWordWrap(True)
+        t_guardar.añadir(aviso)
+        btn_guardar = QPushButton("Guardar en el ratón")
+        btn_guardar.clicked.connect(self._guardar_ajustes_ob)
+        t_guardar.añadir(btn_guardar)
+
+        return _columna(cabecera, t_modo, t_bot, t_guardar)
+
+    def _copia_sector(self) -> str:
+        """Guarda el sector original antes de tocarlo, y devuelve la ruta."""
+        from ..profiles import directorio_perfiles
+        carpeta = directorio_perfiles(self.demo).parent / "respaldo"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        ruta = carpeta / f"{self.raton.id_str}-sector1.bin"
+        ruta.write_bytes(self._sector_ob)
+        return str(ruta)
+
+    def _escribir_perfil_ob(self, perfil, que: str) -> bool:
+        from .. import onboard as ob_mod
+        try:
+            copia = self._copia_sector()
+            self.raton.onboard.escribir_sector(1, ob_mod.escribir_perfil(perfil))
+            self._sector_ob = self.raton.onboard.leer_sector(1)
+            self._perfil_ob = ob_mod.leer_perfil(self._sector_ob,
+                                                 self.raton.onboard.num_botones)
+        except Exception as e:
+            QMessageBox.warning(self, f"No se pudo guardar {que}", str(e))
+            return False
+        QMessageBox.information(
+            self, "Guardado en el ratón",
+            f"{que.capitalize()} guardado en la memoria del ratón.\n\n"
+            f"Copia del estado anterior en:\n{copia}"
+            + ("" if not self.raton.onboard.es_host() else
+               "\n\nEl ratón está en modo host, así que no lo notarás hasta "
+               "que lo pases a onboard o lo conectes en otro ordenador."))
+        return True
+
+    def _guardar_botones(self) -> None:
+        from .. import onboard as ob_mod
+        perfil = self._perfil_ob
+        if perfil is None:
+            return
+        for i, combo in enumerate(self._combos_boton):
+            nombre = combo.currentData()
+            if nombre is None:          # una acción que no sabemos componer
+                continue
+            perfil.botones[i] = ob_mod.ACCIONES[nombre]
+        self._escribir_perfil_ob(perfil, "los botones")
+
+    def _guardar_ajustes_ob(self) -> None:
+        perfil = self._perfil_ob
+        if perfil is None:
+            return
+        dpi = self.estado.get("dpi")
+        rate = self.estado.get("rate")
+        if rate and rate.actual_hz in [125, 250, 500, 1000, 2000, 4000, 8000]:
+            perfil.tasa_hz = rate.actual_hz
+        if dpi:
+            # Si el DPI de ahora ya es uno de los niveles, basta apuntar a él;
+            # si no, se escribe en el que arranca por defecto.
+            valores = [n.x for n in perfil.niveles]
+            if dpi.actual in valores:
+                perfil.nivel_por_defecto = valores.index(dpi.actual)
+            elif perfil.niveles:
+                i = perfil.nivel_por_defecto
+                i = i if 0 <= i < len(perfil.niveles) else 0
+                perfil.niveles[i].x = perfil.niveles[i].y = dpi.actual
+                perfil.nivel_por_defecto = i
+        self._escribir_perfil_ob(perfil, "los ajustes")
 
     def _tab_botones(self) -> QWidget:
         cap = self.raton.buttons

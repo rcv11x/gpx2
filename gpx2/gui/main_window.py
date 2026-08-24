@@ -451,6 +451,11 @@ class PaginaRaton(QWidget):
                     slider.poner(dpi.actual)
                 self._marcar_nivel(dpi.actual)
 
+        if self.raton.rate is not None:
+            try:
+                self.estado["rate"] = self.raton.rate.get()
+            except Exception:
+                pass
         self._resincronizar_rate()
         self._refrescar_perfil_activo()
         self._refrescar_desfase()
@@ -1168,17 +1173,23 @@ class PaginaRaton(QWidget):
         try:
             self._antes_de_escribir()
             self.raton.dpi.set(int(valor))
+            self.estado["dpi"] = self.raton.dpi.get()
             self._marcar_nivel(int(valor))
+            self._refrescar_desfase()
+            self._refrescar_perfil_activo()
         except Exception as e:
             QMessageBox.warning(self, "No se pudo cambiar el DPI",
                                 self._explicar(e))
 
     def _set_rate(self, hz: int) -> None:
-        self._tras_cambiar_rate = True
         from gpx2.features import EscrituraIgnorada
         try:
             self._antes_de_escribir()
             self.raton.rate.set(int(hz))
+            # La foto del estado se toma al construir la página: sin
+            # actualizarla, la comparación con el perfil seguía viendo la tasa
+            # de antes y el botón de guardar no llegaba a aparecer nunca.
+            self.estado["rate"] = self.raton.rate.get()
         except EscrituraIgnorada as e:
             # El ratón no ha cambiado: dejar el desplegable donde estaba, o
             # estaríamos enseñando un valor que el dispositivo no tiene.
@@ -1192,6 +1203,7 @@ class PaginaRaton(QWidget):
                                 self._explicar(e))
             self._resincronizar_rate()
         self._refrescar_desfase()
+        self._refrescar_perfil_activo()
 
     def _resincronizar_rate(self) -> None:
         """Devuelve el desplegable a lo que el ratón dice de verdad."""

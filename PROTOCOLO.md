@@ -264,7 +264,45 @@ Volcado real del perfil 1 (sector 0x0001) del PRO X 2:
 | `b[1]` | otra tasa — probablemente la de la otra vía |
 | `b[2]` | nivel de DPI por defecto |
 | `b[3]` | sin identificar |
-| `b[4]` en adelante | cinco niveles de **5 bytes**: `dpiX(2 LE), dpiY(2 LE), despegue(1)` |
+| `b[4..28]` | cinco niveles de **5 bytes**: `dpiX(2 LE), dpiY(2 LE), despegue(1)` |
+| `b[29..47]` | sin identificar. En `b[44..47]` hay `3c 00` y `2c 01`, que en LE son 60 y 300: encajarían con los tiempos de ahorro y apagado en segundos |
+| `b[48..67]` | **los cinco botones**, 4 bytes cada uno |
+| `b[68..159]` | `ff` en este ratón; ahí irían los botones de G-Shift |
+| `b[160..207]` | nombre del perfil en UTF-16LE; sin poner |
+| `b[208..251]` | cuatro efectos de LED de 11 bytes, como en el 0x06 |
+| `b[253..254]` | **CRC-16/CCITT** del resto del sector |
+
+### Los botones
+
+Cuatro bytes cada uno. El nibble alto del primero es el comportamiento:
+
+| Valor | Comportamiento | Resto |
+|---|---|---|
+| `0x8` | enviar | `b[1]` tipo: 1 botón, 2 modificador+tecla, 3 multimedia · `b[2:4]` el valor |
+| `0x9` | función interna | `b[1]` la función: 3 DPI siguiente, 5 ciclar DPI, 0x0A ciclar perfil… |
+| `0x0`–`0x2` | macros | sector y dirección de la macro |
+
+Volcado real del PRO X 2, que son sus cinco botones en orden:
+
+```
+80 01 00 01   clic izquierdo
+80 01 00 02   clic derecho
+80 01 00 04   clic central
+80 01 00 08   atrás
+80 01 00 10   adelante
+```
+
+El valor es una máscara de un bit por botón. **Cuidado al buscar el bloque**:
+aceptar cualquier nibble conocido da un falso positivo con los bytes de los
+niveles de DPI, que también empiezan por `0x0` y `0x8`. Hay que exigir además
+que el segundo byte sea un tipo o una función que exista.
+
+### Leer un sector entero
+
+El tamaño de sector es 255, que **no es múltiplo de 16**, y cada lectura
+devuelve 16 bytes. Pedir el último bloque en su sitio (byte 240) se sale del
+sector y la petición falla. Se lee solapado desde `tamaño - 16` y se descarta
+lo repetido. Sin esto faltan los 15 últimos bytes — entre ellos el CRC.
 
 Dos cosas confirman la lectura: `b[0]` vale 3, exactamente lo que devuelve
 `0x8061` función 2 (1000 Hz), y `b[2]` vale 0, que apunta al nivel de 800 DPI,

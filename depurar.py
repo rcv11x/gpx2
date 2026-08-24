@@ -445,12 +445,23 @@ def buscar_botones(sector: bytes, cuantos: int) -> int | None:
     misma. En vez de suponerla, se busca: un botón válido empieza por un nibble
     de comportamiento conocido, y tiene que haber varios seguidos.
     """
-    for inicio in range(0, len(sector) - cuantos * 4):
-        if all((sector[inicio + i * 4] >> 4) in COMPORTAMIENTOS
+    def plausible(b: bytes) -> bool:
+        """Un botón de verdad, no cuatro bytes que casualmente encajan.
+
+        Con aceptar cualquier nibble conocido, el bloque de niveles de DPI daba
+        un falso positivo: sus bytes también empiezan por 0x0 y 0x8.
+        """
+        comportamiento = b[0] >> 4
+        if comportamiento == 0x8:               # enviar: el tipo acota mucho
+            return b[1] in TIPOS_ENVIO
+        if comportamiento == 0x9:               # función: tiene que existir
+            return b[1] in FUNCIONES
+        return False
+
+    for inicio in range(0, len(sector) - cuantos * 4 + 1):
+        if all(plausible(sector[inicio + i * 4:inicio + i * 4 + 4])
                for i in range(cuantos)):
-            # Descartar rachas de ceros, que también encajarían.
-            if any(sector[inicio + i * 4] for i in range(cuantos)):
-                return inicio
+            return inicio
     return None
 
 
@@ -522,11 +533,20 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
         # Del activo se lee el sector entero; de los demás basta la cabecera.
         cuanto = tam if habilitado else 32
         crudo = b""
-        for desp in range(0, cuanto, 16):
+        # Cada lectura devuelve 16 bytes, y el tamaño de sector no es múltiplo
+        # de 16: pedir el último bloque en su sitio se sale del sector. Se lee
+        # solapado desde el final y se descarta lo repetido.
+        desp = 0
+        while desp <= cuanto - 16:
             trozo = leer(sector, desp)
             if trozo is None:
                 break
             crudo += trozo
+            desp += 16
+        if len(crudo) < cuanto and cuanto % 16:
+            cola = leer(sector, cuanto - 16)
+            if cola is not None:
+                crudo += cola[16 - cuanto % 16:]
         crudo = crudo[:cuanto]
         if len(crudo) < 16:
             print("     no se pudo leer")
@@ -582,6 +602,11 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
         for i in range(botones):
             b = crudo[inicio + i * 4:inicio + i * 4 + 4]
             print(f"       botón {i}: {hx(b)}   {describir_boton(b)}")
+
+        # El resto del sector: nombre y efectos de LED, como en el formato 0x06.
+        nombre = crudo[160:208].decode("utf-16le", "replace").rstrip("\x00\uffff")
+        if nombre.strip():
+            print(f"\n     nombre del perfil: {nombre!r}")
 
         # Tras los botones normales suelen ir los de G-Shift, otros tantos.
         segundo = inicio + botones * 4

@@ -205,3 +205,34 @@ def juegos_instalados() -> list[Candidato]:
                                 corriendo=False))
     salida.sort(key=lambda c: c.nombre.lower())
     return salida
+
+
+# Steam guarda las carátulas en local, así que se pueden enseñar sin pedir
+# nada a internet. Por orden de preferencia para una lista: el cabecero es
+# apaisado y se reconoce de un vistazo.
+IMAGENES = ("library_header.jpg", "header.jpg", "logo.png",
+            "library_600x900.jpg")
+
+
+def _cachés_steam() -> list[Path]:
+    return [raiz / "appcache/librarycache"
+            for raiz in (Path.home() / ".steam/steam",
+                         Path.home() / ".local/share/Steam")]
+
+
+def caratula(appid: int) -> str | None:
+    """Ruta a la imagen del juego, si Steam la tiene descargada.
+
+    Steam la guarda de dos formas según la versión: una carpeta por AppID, o
+    ficheros sueltos con el AppID delante. Se prueban las dos.
+    """
+    for cache in _cachés_steam():
+        carpeta = cache / str(appid)
+        for nombre in IMAGENES:
+            ruta = carpeta / nombre
+            if ruta.is_file():
+                return str(ruta)
+            suelta = cache / f"{appid}_{nombre}"
+            if suelta.is_file():
+                return str(suelta)
+    return None

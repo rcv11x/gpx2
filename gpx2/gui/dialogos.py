@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QPushButton, QVBoxLayout, QWidget)
 
-from ..procesos import (juegos_instalados, listar_candidatos,
-                        nombres_de_steam)
+from ..procesos import (caratula, juegos_instalados,
+                        listar_candidatos, nombres_de_steam)
 
 ROL_VALOR = Qt.ItemDataRole.UserRole
 
@@ -77,6 +78,10 @@ class DialogoJuegos(QDialog):
         raiz.addWidget(fila_busq)
 
         self.lista_procesos = QListWidget()
+        # Steam guarda las carátulas en local: se reconoce el juego de un
+        # vistazo, sin leer. Apaisado porque es como vienen los cabeceros.
+        self.lista_procesos.setIconSize(QSize(72, 34))
+        self._icono_vacio: QIcon | None = None
         self.lista_procesos.itemDoubleClicked.connect(lambda _: self._añadir())
         raiz.addWidget(self.lista_procesos, 1)
 
@@ -128,6 +133,18 @@ class DialogoJuegos(QDialog):
 
     # -- procesos -------------------------------------------------------------
 
+    def _hueco(self) -> QIcon:
+        """Un icono transparente del mismo tamaño.
+
+        Sin esto, las filas sin carátula empiezan más a la izquierda que las
+        demás y el borde del texto queda irregular.
+        """
+        if self._icono_vacio is None:
+            pm = QPixmap(self.lista_procesos.iconSize())
+            pm.fill(Qt.GlobalColor.transparent)
+            self._icono_vacio = QIcon(pm)
+        return self._icono_vacio
+
     def _cargar(self) -> None:
         self.lista_procesos.clear()
         corriendo = listar_candidatos()
@@ -146,12 +163,15 @@ class DialogoJuegos(QDialog):
             # Los que traen una pista fuerte van marcados: Steam los identifica
             # en su entorno, y Proton o Wine dejan huella en la ruta.
             if not c.corriendo:
-                marca = "      "
+                marca = ""
                 sufijo = "   (instalado)"
             else:
-                marca = "🎮  " if c.probable else "      "
-                sufijo = ""
+                # Que esté abierto se dice, no se deja deducir por la posición.
+                marca = ""
+                sufijo = "   (abierto)" if c.probable else ""
             item = QListWidgetItem(marca + c.etiqueta + sufijo)
+            imagen = caratula(c.steam_appid) if c.steam_appid else None
+            item.setIcon(QIcon(imagen) if imagen else self._hueco())
             item.setToolTip(c.exe or f"Steam {c.steam_appid}")
             item.setData(ROL_VALOR,
                          ("steam", c.steam_appid) if c.steam_appid

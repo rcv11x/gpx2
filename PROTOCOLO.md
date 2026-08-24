@@ -297,6 +297,27 @@ aceptar cualquier nibble conocido da un falso positivo con los bytes de los
 niveles de DPI, que también empiezan por `0x0` y `0x8`. Hay que exigir además
 que el segundo byte sea un tipo o una función que exista.
 
+### Escribir un sector
+
+Tres funciones, en este orden:
+
+| Función | Qué hace | Parámetros |
+|---|---|---|
+| 6 | abre la escritura | `[sector(2), desplazamiento(2), longitud(2)]` |
+| 7 | manda un trozo | hasta 16 bytes de datos, repetida |
+| 8 | cierra y confirma | — |
+
+Los dos últimos bytes del sector son el **CRC-16/CCITT** (polinomio `0x1021`,
+inicio `0xFFFF`, sin reflejar, sin XOR final) de todo lo anterior. El ratón lo
+comprueba. Verificado leyendo antes de escribir nada: para el sector 1 del
+PRO X 2, el ratón trae `0x84DB` y nuestro cálculo da `0x84DB`.
+
+**Antes de escribir nada que importe** conviene reescribir un sector con lo
+mismo que ya tenía, y hacerlo sobre un perfil **deshabilitado** (el 2, el 3 o
+el 4): así se ejercita el mecanismo entero sin que un fallo afecte a nada que
+el ratón use. `depurar.py --probar-escritura` hace eso, guardando antes una
+copia del sector en un fichero por si hay que restaurarlo.
+
 ### Leer un sector entero
 
 El tamaño de sector es 255, que **no es múltiplo de 16**, y cada lectura

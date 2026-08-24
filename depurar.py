@@ -465,6 +465,128 @@ def buscar_botones(sector: bytes, cuantos: int) -> int | None:
     return None
 
 
+def leer_sector(s: Sonda, sector: int, tam: int) -> bytes | None:
+    """Lee un sector entero de la memoria de perfiles (0x8100 función 5).
+
+    Cada petición devuelve 16 bytes y el tamaño de sector no es múltiplo de 16,
+    así que el último bloque se pide solapado desde el final: pedirlo en su
+    sitio se saldría del sector y la petición falla en silencio.
+    """
+    datos = b""
+    desp = 0
+    while desp <= tam - 16:
+        trozo = s.llamar(0x8100, 0x05,
+                         bytes([sector >> 8, sector & 0xFF,
+                                desp >> 8, desp & 0xFF]))
+        if trozo is None:
+            return None
+        datos += trozo
+        desp += 16
+    if len(datos) < tam and tam % 16:
+        cola = s.llamar(0x8100, 0x05,
+                        bytes([sector >> 8, sector & 0xFF,
+                               (tam - 16) >> 8, (tam - 16) & 0xFF]))
+        if cola is None:
+            return None
+        datos += cola[16 - tam % 16:]
+    return datos[:tam]
+
+
+def escribir_sector(s: Sonda, sector: int, datos: bytes) -> None:
+    """Escribe un sector completo. Función 6 abre, 7 manda trozos, 8 cierra.
+
+    Los dos últimos bytes deben ser el CRC-16/CCITT del resto; el ratón lo
+    comprueba. Quien llame a esto ya debe haberlo calculado.
+    """
+    idx = s.tabla[0x8100].index
+    tam = len(datos)
+    s.hpp.call(idx, 0x06, bytes([sector >> 8, sector & 0xFF, 0, 0,
+                                 tam >> 8, tam & 0xFF]))
+    for desp in range(0, tam, 16):
+        s.hpp.call(idx, 0x07, datos[desp:desp + 16])
+    s.hpp.call(idx, 0x08)
+
+
+def bloque_prueba_escritura(s: Sonda, sector: int, ruta_copia: str) -> None:
+    """Reescribe un sector con lo mismo que ya tenía. Prueba en seco.
+
+    La idea es ejercitar el mecanismo entero —abrir, mandar, cerrar y el CRC—
+    sin cambiar ningún valor, para saber si funciona antes de tocar nada que
+    importe. Y se hace sobre un perfil DESHABILITADO: si algo saliera mal, el
+    ratón no lo usa para nada.
+    """
+    titulo(f"PRUEBA EN SECO: reescribir el sector 0x{sector:04X} sin cambios")
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    tam = int.from_bytes(info[7:9], "big")
+
+    original = leer_sector(s, sector, tam)
+    if original is None or len(original) != tam:
+        print(f"  No se pudo leer el sector entero ({tam} bytes).")
+        return
+
+    with open(ruta_copia, "wb") as fh:
+        fh.write(original)
+    print(f"  Copia de seguridad guardada en {ruta_copia} ({tam} bytes).")
+
+    esperado = int.from_bytes(original[tam - 2:tam], "big")
+    calculado = crc16_ccitt(original[:tam - 2])
+    if esperado != calculado:
+        print(f"  El CRC no cuadra (dice 0x{esperado:04X}, calculamos "
+              f"0x{calculado:04X}). No se escribe nada.")
+        return
+    print(f"  CRC comprobado: 0x{esperado:04X}. Se reescribe lo mismo.")
+
+    try:
+        escribir_sector(s, sector, original)
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"  ⚠ la escritura falló: {e}")
+        print(f"  El sector puede haber quedado a medias. Para restaurarlo:")
+        print(f"     sudo python3 depurar.py --restaurar {ruta_copia} "
+              f"--sector {sector}")
+        return
+
+    despues = leer_sector(s, sector, tam)
+    if despues is None:
+        print("  No se pudo releer el sector.")
+        return
+    if despues == original:
+        print("\n     *** FUNCIONA: el sector volvió idéntico ***")
+        print("     El mecanismo de escritura y el CRC son correctos.")
+    else:
+        print("\n     ✗ el sector cambió al reescribirlo:")
+        for i in range(0, tam, 16):
+            a, b = original[i:i + 16], despues[i:i + 16]
+            if a != b:
+                print(f"       +{i:03d} antes  {hx(a)}")
+                print(f"       +{i:03d} ahora  {hx(b)}")
+        print(f"\n     Para restaurarlo: sudo python3 depurar.py "
+              f"--restaurar {ruta_copia} --sector {sector}")
+
+
+def bloque_restaurar(s: Sonda, ruta: str, sector: int) -> None:
+    """Devuelve un sector a como estaba, desde una copia guardada."""
+    titulo(f"RESTAURAR el sector 0x{sector:04X} desde {ruta}")
+    try:
+        with open(ruta, "rb") as fh:
+            datos = fh.read()
+    except OSError as e:
+        print(f"  no se pudo leer la copia: {e}")
+        return
+    print(f"  {len(datos)} bytes. CRC guardado: "
+          f"0x{int.from_bytes(datos[-2:], 'big'):04X}")
+    try:
+        escribir_sector(s, sector, datos)
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"  ⚠ falló: {e}")
+        return
+    vuelta = leer_sector(s, sector, len(datos))
+    print("  ✓ restaurado" if vuelta == datos else "  ✗ no coincide tras escribir")
+
+
 def bloque_perfiles_onboard(s: Sonda) -> None:
     """Vuelca la memoria de perfiles del ratón. Sólo lee, no escribe nada.
 
@@ -823,6 +945,16 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--probar-escritura", action="store_true",
+                    help="reescribe un perfil DESHABILITADO con lo mismo que "
+                         "tenía, para comprobar el mecanismo sin arriesgar nada")
+    ap.add_argument("--sector", type=int, default=2,
+                    help="sector sobre el que probar o restaurar (por defecto 2, "
+                         "que está deshabilitado)")
+    ap.add_argument("--restaurar", metavar="FICHERO",
+                    help="devuelve un sector a como estaba desde una copia")
+    ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
+                    help="dónde guardar la copia de seguridad del sector")
     ap.add_argument("--medir", nargs="?", const=5.0, type=float,
                     metavar="SEGUNDOS",
                     help="mide la tasa de reporte real moviendo el ratón")
@@ -855,6 +987,14 @@ def main() -> int:
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
 
+    if args.restaurar or args.probar_escritura:
+        if args.restaurar:
+            bloque_restaurar(s, args.restaurar, args.sector)
+        else:
+            bloque_prueba_escritura(s, args.sector, args.copia)
+        ch.close()
+        return 0
+
     bloque_bateria(s)
     bloque_modo(s, args.escribir)
     estado, validos = {}, []
@@ -871,6 +1011,11 @@ def main() -> int:
     if args.escribir and s.tiene(0x8061):
         bloque_escritura_tasa(s, args.hz, not args.sin_restaurar,
                               args.en_onboard)
+
+    if args.restaurar and s.tiene(0x8100):
+        bloque_restaurar(s, args.restaurar, args.sector)
+    elif args.probar_escritura and s.tiene(0x8100):
+        bloque_prueba_escritura(s, args.sector, args.copia)
 
     print("\n")
     ch.close()

@@ -603,6 +603,57 @@ ACCIONES = {
 }
 
 
+def bloque_botones_de_fabrica(s: Sonda, sector: int, ruta_copia: str) -> None:
+    """Deja los cinco botones como vienen de fábrica.
+
+    Red de seguridad: si un botón queda mal configurado puede costar usar el
+    ratón, y entonces no es momento de andar eligiendo acciones en una lista.
+    """
+    titulo(f"BOTONES DE FÁBRICA en el sector 0x{sector:04X}")
+    DE_FABRICA = [ACCIONES["izquierdo"], ACCIONES["derecho"],
+                  ACCIONES["central"], ACCIONES["atras"], ACCIONES["adelante"]]
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    tam = int.from_bytes(info[7:9], "big")
+    cuantos = info[5]
+
+    original = leer_sector(s, sector, tam)
+    if original is None or len(original) != tam:
+        print("  No se pudo leer el sector.")
+        return
+    with open(ruta_copia, "wb") as fh:
+        fh.write(original)
+    print(f"  Copia de lo que había en {ruta_copia}")
+
+    inicio = buscar_botones(original, cuantos)
+    if inicio is None:
+        print("  No se encontró el bloque de botones. No se toca nada.")
+        return
+    print(f"  Bloque en el byte {inicio}. Estado actual:")
+    for i in range(cuantos):
+        b = original[inicio + i * 4:inicio + i * 4 + 4]
+        print(f"     botón {i}: {hx(b)}   {describir_boton(b)}")
+
+    cuerpo = bytearray(original[:tam - 2])
+    for i, valor in enumerate(DE_FABRICA[:cuantos]):
+        cuerpo[inicio + i * 4:inicio + i * 4 + 4] = valor
+    nuevo = bytes(cuerpo) + crc16_ccitt(bytes(cuerpo)).to_bytes(2, "big")
+
+    try:
+        escribir_sector(s, sector, nuevo)
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"  ⚠ falló: {e}")
+        return
+    despues = leer_sector(s, sector, tam)
+    if despues == nuevo:
+        print("\n     ✓ los cinco botones vuelven a ser los de fábrica")
+    else:
+        print("\n     ✗ no quedó como se pidió")
+
+
 def bloque_cambiar_boton(s: Sonda, sector: int, numero: int, accion: str,
                          ruta_copia: str, forzar: bool) -> None:
     """Cambia un botón del perfil onboard. Escribe en el ratón.
@@ -1062,6 +1113,8 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--botones-de-fabrica", action="store_true",
+                    help="deja los cinco botones como vienen de fábrica")
     ap.add_argument("--cambiar-boton", metavar="N=ACCION",
                     help="cambia un botón del perfil onboard, p. ej. 3=central. "
                          "Acciones: izquierdo, derecho, central, atras, "
@@ -1116,6 +1169,11 @@ def main() -> int:
 
     if args.modo:
         bloque_cambiar_modo(s, args.modo)
+        ch.close()
+        return 0
+
+    if args.botones_de_fabrica:
+        bloque_botones_de_fabrica(s, args.sector_perfil, args.copia)
         ch.close()
         return 0
 

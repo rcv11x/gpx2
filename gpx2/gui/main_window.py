@@ -1067,6 +1067,7 @@ class PanelPerfiles(QWidget):
                           "Cada perfil es un fichero TOML en "
                           f"{self.almacen.dir}, editable a mano.")
         self.lista = QListWidget()
+        self.lista.setObjectName("ListaDispositivos")
         self.lista.setItemDelegate(DelegadoDispositivo(self.lista))
         self.lista.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1187,18 +1188,16 @@ class PanelPerfiles(QWidget):
         self.refrescar()
 
     def _editar_juegos(self) -> None:
+        from .dialogos import DialogoJuegos
         perfil = self._seleccionado()
         if perfil is None:
             return
-        texto, ok = QInputDialog.getText(
-            self, f"Juegos de «{perfil.nombre}»",
-            "Ejecutables separados por comas. Vale el nombre exacto o un trozo "
-            "de la ruta:\nejemplo:  valorant.exe, cs2, Hades2",
-            text=", ".join(perfil.activacion.ejecutables))
-        if not ok:
+        dlg = DialogoJuegos(perfil.nombre,
+                            list(perfil.activacion.ejecutables),
+                            list(perfil.activacion.steam_appids), self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
             return
-        perfil.activacion.ejecutables = [
-            t.strip() for t in texto.split(",") if t.strip()]
+        perfil.activacion.ejecutables, perfil.activacion.steam_appids = dlg.resultado()
         self.almacen.guardar(perfil)
         self.refrescar()
 
@@ -1250,6 +1249,7 @@ class VentanaPrincipal(QMainWindow):
         lat.addWidget(cab)
 
         self.lista = QListWidget()
+        self.lista.setObjectName("ListaDispositivos")
         self.lista.setItemDelegate(DelegadoDispositivo(self.lista))
         self.lista.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

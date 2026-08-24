@@ -50,9 +50,17 @@ def hoja_de_estilo(pal: QPalette) -> str:
         border-radius: 9px;
         padding: 2px 10px;
     }}
-    QListWidget {{ background: transparent; border: none; }}
-    QListWidget::item {{ padding: 9px 12px; border-radius: 8px; margin: 2px 6px; }}
-    QListWidget::item:selected {{ background: {realce.name()}; color: {pal.color(QPalette.ColorRole.HighlightedText).name()}; }}
+    /* Sólo la lista de dispositivos: es la que lleva el delegado con dos
+       líneas por entrada. Las demás listas del programa se quedan con el
+       estilo nativo, que para una lista normal se ve mejor. */
+    QListWidget#ListaDispositivos {{ background: transparent; border: none; }}
+    QListWidget#ListaDispositivos::item {{
+        padding: 9px 12px; border-radius: 8px; margin: 2px 6px;
+    }}
+    QListWidget#ListaDispositivos::item:selected {{
+        background: {realce.name()};
+        color: {pal.color(QPalette.ColorRole.HighlightedText).name()};
+    }}
     QTabWidget::pane {{ border: none; }}
     /* Los 18px son los mismos que el margen de las tarjetas y la cabecera:
        sin esto la primera pestaña queda desalineada con todo lo de abajo.

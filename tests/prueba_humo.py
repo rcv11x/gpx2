@@ -77,6 +77,22 @@ def main() -> int:
         comprobar(cambios == [], "reaplicar el mismo perfil no manda nada")
         comprobar(motor.perfil_activo == "shooter", "recuerda el perfil activo")
 
+    print("6. Botones reprogramables (0x1B04)")
+    botones = raton.buttons
+    comprobar(botones is not None, "el ratón declara la feature de botones")
+    controles = botones.controls()
+    comprobar(len(controles) == 6, "enumera los seis controles")
+    izquierdo = next(c for c in controles if c.cid == 0x0050)
+    atras = next(c for c in controles if c.cid == 0x0053)
+    central = next(c for c in controles if c.cid == 0x0052)
+    comprobar(izquierdo.nombre == "Clic izquierdo", "pone nombre a los controles conocidos")
+    comprobar(not izquierdo.admite(central), "respeta que el clic izquierdo no se puede mover")
+    comprobar(atras.admite(central), "permite remapear el botón 4 al central")
+    botones.remapear(atras.cid, central.cid)
+    comprobar(botones.reporting(atras.cid).remapeado_a == central.cid, "el remapeo se guarda")
+    botones.restaurar(atras.cid)
+    comprobar(botones.reporting(atras.cid).remapeado_a == 0, "restaurar deja el botón como estaba")
+
     print()
     if fallos:
         print(f"{len(fallos)} comprobación(es) fallida(s)")

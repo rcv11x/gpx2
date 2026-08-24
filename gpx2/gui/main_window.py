@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices, QFont, QIcon
+from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
                                QHeaderView, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem,
@@ -234,16 +234,93 @@ class PaginaRaton(QWidget):
         return _columna(t, t2)
 
     def _tab_botones(self) -> QWidget:
-        t = Tarjeta("Remapeo de botones — pendiente (fase 6)",
-                    "Requiere la feature 0x1B04 (botones reprogramables). El plan "
-                    "es listar los controles físicos, sus acciones posibles, y "
-                    "permitir reasignarlos por perfil.")
-        tabla = self.raton.hpp.features()
-        disponible = 0x1B04 in tabla
-        t.añadir(QLabel("✅ El ratón soporta 0x1B04, se puede implementar."
-                        if disponible else
-                        "❌ Este ratón no expone 0x1B04."))
-        return _columna(t)
+        cap = self.raton.buttons
+        if cap is None:
+            return _columna(Tarjeta(
+                "Botones reprogramables",
+                "Este ratón no expone la feature 0x1B04, así que no se pueden "
+                "reasignar sus botones."))
+
+        try:
+            controles = cap.controls()
+        except Exception as e:
+            return _columna(Tarjeta("Botones reprogramables",
+                                    f"No se pudo leer la lista de controles: {e}"))
+
+        tarjeta = Tarjeta(
+            "Botones reprogramables",
+            f"Feature 0x1B04 ({cap.CONFIANZA}). Cada botón sólo puede adoptar "
+            "la función de otros que el firmware permita: por eso el clic "
+            "izquierdo casi nunca se puede mover. No es una limitación de este "
+            "programa, la impone el ratón.")
+
+        self._combos_botones = {}
+        movibles = 0
+        for control in controles:
+            destinos = [d for d in controles
+                        if d.cid != control.cid and control.admite(d)]
+            fila = QHBoxLayout()
+            etiqueta = QLabel(control.nombre)
+            etiqueta.setMinimumWidth(190)
+            fila.addWidget(etiqueta)
+
+            combo = QComboBox()
+            combo.addItem("Función original", 0)
+            for d in destinos:
+                combo.addItem(f"Actuar como: {d.nombre}", d.cid)
+
+            if not destinos:
+                combo.setEnabled(False)
+                combo.setToolTip("El firmware no permite reasignar este botón")
+            else:
+                movibles += 1
+                try:
+                    actual = cap.reporting(control.cid).remapeado_a
+                    indice = combo.findData(actual)
+                    combo.setCurrentIndex(max(0, indice))
+                except Exception:
+                    pass
+                combo.currentIndexChanged.connect(
+                    lambda i, c=combo, cid=control.cid: self._remapear(cid, c.itemData(i)))
+
+            self._combos_botones[control.cid] = combo
+            fila.addWidget(combo, 1)
+            fila.addWidget(QLabel(f"grupo {control.group}"))
+            tarjeta.añadir_layout(fila)
+
+        restaurar = QPushButton("Restaurar todos los botones")
+        restaurar.clicked.connect(lambda: self._restaurar_botones(controles))
+        restaurar.setEnabled(movibles > 0)
+        tarjeta.añadir(restaurar)
+
+        aviso = Tarjeta(
+            "Qué falta aquí",
+            "De momento un botón sólo puede adoptar la función de otro botón "
+            "del ratón. Asignar acciones del sistema (una tecla, una macro, un "
+            "atajo) necesita además \"desviar\" el botón hacia el demonio y que "
+            "sea él quien genere el evento — eso viene después, y usa el mismo "
+            "0x1B04 con el bit de desvío.")
+        return _columna(tarjeta, aviso)
+
+    def _remapear(self, cid: int, destino: int) -> None:
+        try:
+            if destino:
+                self.raton.buttons.remapear(cid, destino)
+            else:
+                self.raton.buttons.restaurar(cid)
+        except Exception as e:
+            QMessageBox.warning(self, "No se pudo reasignar el botón", str(e))
+
+    def _restaurar_botones(self, controles) -> None:
+        for control in controles:
+            try:
+                self.raton.buttons.restaurar(control.cid)
+            except Exception:
+                pass
+        for cid, combo in self._combos_botones.items():
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
 
     def _tab_perfiles(self) -> QWidget:
         return PanelPerfiles(self.raton)
@@ -314,6 +391,12 @@ class PaginaRaton(QWidget):
             ("0x8060 getReportRate", 0x8060, 0x01, b""),
             ("0x8090 getModeStatus", 0x8090, 0x00, b""),
             ("0x8100 getOnboardProfilesInfo", 0x8100, 0x00, b""),
+            ("0x1B04 getCount", 0x1B04, 0x00, b""),
+            ("0x1B04 getCidInfo(0)", 0x1B04, 0x01, b"\x00"),
+            ("0x1B04 getCidInfo(1)", 0x1B04, 0x01, b"\x01"),
+            ("0x1B04 getCidInfo(2)", 0x1B04, 0x01, b"\x02"),
+            ("0x1B04 getCidInfo(3)", 0x1B04, 0x01, b"\x03"),
+            ("0x1B04 getCidReporting(0x53)", 0x1B04, 0x02, b"\x00\x53"),
         ]
         tabla = self.raton.hpp.features()
         for etiqueta, fid, func, params in pruebas:
@@ -596,6 +679,10 @@ class VentanaPrincipal(QMainWindow):
 
         lateral = QWidget()
         lateral.setObjectName("Lateral")
+        # Sin esto el divisor deja arrastrar la barra hasta que desaparece y
+        # no hay forma de recuperarla.
+        lateral.setMinimumWidth(210)
+        lateral.setMaximumWidth(420)
         lat = QVBoxLayout(lateral)
         lat.setContentsMargins(0, 14, 0, 10)
         lat.setSpacing(8)
@@ -624,8 +711,21 @@ class VentanaPrincipal(QMainWindow):
         divisor.addWidget(self.pila)
         divisor.setStretchFactor(1, 1)
         divisor.setSizes([270, 770])
+        divisor.setChildrenCollapsible(False)
+        self.lateral = lateral
         self.setCentralWidget(divisor)
 
+        # Ocultar la barra sí, pero a propósito y con vuelta atrás.
+        self.accion_lateral = QAction("Mostrar u ocultar los dispositivos", self)
+        self.accion_lateral.setShortcut("Ctrl+B")
+        self.accion_lateral.triggered.connect(self._alternar_lateral)
+        self.addAction(self.accion_lateral)
+
+        self.btn_lateral = QPushButton("◧  Dispositivos")
+        self.btn_lateral.setFlat(True)
+        self.btn_lateral.setToolTip("Mostrar u ocultar el panel lateral (Ctrl+B)")
+        self.btn_lateral.clicked.connect(self._alternar_lateral)
+        self.statusBar().addPermanentWidget(self.btn_lateral)
         self.statusBar().showMessage("Listo")
         QTimer.singleShot(0, self.escanear)
 
@@ -735,6 +835,9 @@ class VentanaPrincipal(QMainWindow):
                 "en la lista, pero sólo permiten ajustar la sensibilidad de Plasma.")
         if not self.lista.count():
             self.pila.setCurrentWidget(self.vacia)
+
+    def _alternar_lateral(self) -> None:
+        self.lateral.setVisible(not self.lateral.isVisible())
 
     def closeEvent(self, evento):
         if self.hallazgo:

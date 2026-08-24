@@ -356,7 +356,8 @@ gpx2/
 - **F3 — Perfiles TOML + demonio + D-Bus** ✅
 - **F4 — Interfaz gráfica** ✅ (falta pulido, no funcionalidad)
 - **F5 — Cambio automático por juego** ✅ (GameMode + respaldo por /proc)
-- **F6 — Remapeo de botones (0x1B04)** ⬜ pendiente
+- **F6 — Remapeo de botones (0x1B04)** ✅ (reasignar un botón a la función
+  de otro; asignar teclas o macros necesita el modo desvío, que viene después)
 - **F7 — Escritura de perfiles onboard (layout 0x06)** ⬜ pendiente, opcional
 
 Lo único que bloquea el resto: **validar `0x2202` y `0x8061` contra el ratón

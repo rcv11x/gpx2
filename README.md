@@ -72,12 +72,14 @@ Si no aparece ningún ratón compatible, la interfaz lo dice y explica por qué
 - **Demonio** que aplica el perfil que toca y expone todo en D-Bus
 - **Cambio automático al arrancar un juego**, vía GameMode y con sondeo de
   `/proc` como respaldo
+- **Remapeo de botones** (0x1B04), respetando los grupos que permite el firmware
 - Ajusta la sensibilidad del puntero en KDE, también para ratones genéricos
 - Vuelca respuestas en crudo para decodificar features nuevas
 
 ## Qué falta
 
-Remapeo de botones (0x1B04) y escritura de perfiles onboard (layout 0x06).
+Desviar botones al demonio para asignarles teclas o macros, y escritura de
+perfiles onboard (layout 0x06).
 Y sobre todo: **validar 0x2202 y 0x8061 contra el ratón real**.
 Ver el roadmap en `ARQUITECTURA.md`.
 

@@ -36,6 +36,18 @@ DPI_MIN, DPI_MAX, DPI_PASO = 100, 32000, 50
 HZ_INDICE = 4                      # posición en ExtendedReportRate.MAPEO_HZ
 BATERIA = (78, 3, 0, 0)            # porcentaje, nivel, estado, alimentación
 
+# Botones que declararía el ratón: (cid, task_id, flags, pos, group, gmask)
+#   flags 0x01 botón de ratón | 0x10 reprogramable | 0x20 divertible
+# El clic izquierdo y el derecho tienen gmask 0: el firmware no deja moverlos.
+BOTONES = [
+    (0x0050, 0x0038, 0x11, 0, 1, 0x00),
+    (0x0051, 0x0039, 0x11, 0, 2, 0x00),
+    (0x0052, 0x003A, 0x31, 0, 3, 0x07),
+    (0x0053, 0x003C, 0x31, 0, 3, 0x07),
+    (0x0056, 0x003E, 0x31, 0, 3, 0x07),
+    (0x00C3, 0x00C3, 0x31, 0, 3, 0x07),
+]
+
 
 class CanalSimulado:
     """Habla el mismo protocolo que un /dev/hidraw real, pero de mentira."""
@@ -45,6 +57,7 @@ class CanalSimulado:
         self.dpi = DPI_ACTUAL
         self.hz_idx = HZ_INDICE
         self.indices = {fid: i for i, fid in enumerate(TABLA)}
+        self.remapeos: dict[int, int] = {}
 
     # -- contrato de RawChannel ----------------------------------------------
 
@@ -128,6 +141,27 @@ class CanalSimulado:
             if func == 0x02:
                 self.hz_idx = params[1]
                 return bytes([self.hz_idx])
+
+        if fid == 0x1B04:                                   # botones
+            if func == 0x00:
+                return bytes([len(BOTONES)])
+            if func == 0x01:
+                cid, tid, flags, pos, grupo, gmask = BOTONES[params[0]]
+                return (cid.to_bytes(2, "big") + tid.to_bytes(2, "big")
+                        + bytes([flags, pos, grupo, gmask, 0]))
+            if func == 0x02:
+                cid = int.from_bytes(params[0:2], "big")
+                destino = self.remapeos.get(cid, 0)
+                return (cid.to_bytes(2, "big") + b"\x00"
+                        + destino.to_bytes(2, "big"))
+            if func == 0x03:
+                cid = int.from_bytes(params[0:2], "big")
+                destino = int.from_bytes(params[3:5], "big")
+                if destino:
+                    self.remapeos[cid] = destino
+                else:
+                    self.remapeos.pop(cid, None)
+                return params[0:5]
 
         if fid == 0x8090 and func == 0x00:                  # modo
             return b"\x00\x00"                              # arranca en onboard

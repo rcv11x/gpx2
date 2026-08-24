@@ -262,3 +262,119 @@ class ModeStatus(Capability):
 DPI_CLASSES = [ExtendedDpi, AdjustableDpi]        # 0x2202 gana a 0x2201
 RATE_CLASSES = [ExtendedReportRate, ReportRate]   # 0x8061 gana a 0x8060
 BATTERY_CLASSES = [UnifiedBattery, LegacyBattery]
+
+
+# ---------------------------------------------------------------------------
+# Botones reprogramables  (fase 6)
+# ---------------------------------------------------------------------------
+
+# Identificadores de control conocidos. Los que no estén aquí se muestran como
+# "Control 0xNNNN": no es un error, sólo que aún no le hemos puesto nombre.
+CONTROLES = {
+    0x0050: "Clic izquierdo",
+    0x0051: "Clic derecho",
+    0x0052: "Botón central",
+    0x0053: "Atrás (botón 4)",
+    0x0056: "Adelante (botón 5)",
+    0x005B: "Rueda a la izquierda",
+    0x005D: "Rueda a la derecha",
+    0x00C3: "Cambio de DPI",
+    0x00C4: "Botón de gesto",
+}
+
+
+@dataclass
+class Control:
+    """Un botón físico del ratón, tal y como lo describe el propio ratón."""
+    cid: int             # identificador de este control
+    task_id: int         # qué hace de fábrica
+    flags: int
+    pos: int
+    group: int           # a qué grupo pertenece
+    gmask: int           # qué grupos puede *adoptar* si lo remapeas
+    extra: int
+
+    @property
+    def nombre(self) -> str:
+        return CONTROLES.get(self.cid, f"Control 0x{self.cid:04X}")
+
+    @property
+    def es_boton_raton(self) -> bool:
+        return bool(self.flags & 0x01)
+
+    @property
+    def reprogramable(self) -> bool:
+        return bool(self.flags & 0x10)
+
+    @property
+    def divertible(self) -> bool:
+        """Puede enviarse al software en vez de al sistema (para macros)."""
+        return bool(self.flags & 0x20)
+
+    @property
+    def virtual(self) -> bool:
+        return bool(self.flags & 0x80)
+
+    def admite(self, destino: "Control") -> bool:
+        """Regla del protocolo: sólo se puede remapear a un control cuyo grupo
+        esté permitido en la máscara de este. No es una limitación nuestra, la
+        impone el firmware — por eso el clic izquierdo casi nunca se puede
+        mover."""
+        if destino.group == 0:
+            return False
+        return bool(self.gmask & (1 << (destino.group - 1)))
+
+
+@dataclass
+class Reporte:
+    """Cómo está configurado ahora mismo un control."""
+    cid: int
+    divertido: bool
+    persistente: bool
+    remapeado_a: int     # 0 = sin remapear, hace lo suyo de fábrica
+
+
+class ReprogrammableControls(Capability):
+    """Feature 0x1B04: leer los botones y reasignarlos.
+
+    Implementado a partir de la documentación del protocolo, PENDIENTE de
+    validar con el ratón real. La pestaña de Diagnóstico vuelca las respuestas
+    en crudo para poder corregirlo sin adivinar.
+    """
+    FID, TITULO, CONFIANZA = 0x1B04, "Botones", "por validar"
+
+    # bits del byte de flags en setCidReporting: cada ajuste va acompañado de
+    # un bit de "sí, quiero cambiar esto", para poder tocar uno sin pisar los
+    # demás.
+    DIVERT, DIVERT_VALIDO = 0x01, 0x02
+    PERSIST, PERSIST_VALIDO = 0x04, 0x08
+    RAW_XY, RAW_XY_VALIDO = 0x10, 0x20
+
+    def count(self) -> int:
+        return self.call(0x00)[0]
+
+    def controls(self) -> list[Control]:
+        salida = []
+        for i in range(self.count()):
+            r = self.call(0x01, bytes([i]))
+            salida.append(Control(
+                cid=int.from_bytes(r[0:2], "big"),
+                task_id=int.from_bytes(r[2:4], "big"),
+                flags=r[4], pos=r[5], group=r[6], gmask=r[7],
+                extra=r[8] if len(r) > 8 else 0))
+        return salida
+
+    def reporting(self, cid: int) -> Reporte:
+        r = self.call(0x02, cid.to_bytes(2, "big"))
+        return Reporte(cid=int.from_bytes(r[0:2], "big"),
+                       divertido=bool(r[2] & self.DIVERT),
+                       persistente=bool(r[2] & self.PERSIST),
+                       remapeado_a=int.from_bytes(r[3:5], "big"))
+
+    def remapear(self, cid: int, destino_cid: int) -> None:
+        """Hace que `cid` se comporte como `destino_cid`. destino 0 = original."""
+        self.call(0x03, cid.to_bytes(2, "big") + bytes([0])
+                  + destino_cid.to_bytes(2, "big"))
+
+    def restaurar(self, cid: int) -> None:
+        self.remapear(cid, 0)

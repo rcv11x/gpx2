@@ -36,6 +36,7 @@ class Mouse:
         self.battery = None
         self.mode = None
         self.buttons = None
+        self.info = None
 
         self._construir()
 
@@ -69,6 +70,7 @@ class Mouse:
         self.battery = self._primera(feat.BATTERY_CLASSES)
         self.mode = self._primera([feat.ModeStatus])
         self.buttons = self._primera([feat.ReprogrammableControls])
+        self.info = self._primera([feat.DeviceInfo])
 
     # -- consulta -------------------------------------------------------------
 

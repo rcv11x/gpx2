@@ -142,6 +142,16 @@ class CanalSimulado:
                 self.hz_idx = params[1]
                 return bytes([self.hz_idx])
 
+        if fid == 0x0003:                                   # info y firmware
+            if func == 0x00:
+                # entidades, unitId(4), transporte(2), modelId(6), ext
+                return bytes([2, 0xA1, 0xB2, 0xC3, 0xD4, 0x00, 0x07]) + b"\x00" * 7
+            if func == 0x01:
+                entidad = params[0]
+                if entidad == 0:                            # firmware principal
+                    return bytes([0]) + b"MPM" + bytes([0x25, 0x01]) + (0x0043).to_bytes(2, "big")
+                return bytes([1]) + b"BOT" + bytes([0x11, 0x00]) + (0x0009).to_bytes(2, "big")
+
         if fid == 0x1B04:                                   # botones
             if func == 0x00:
                 return bytes([len(BOTONES)])

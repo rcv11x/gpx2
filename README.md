@@ -11,11 +11,32 @@ Ver `ARQUITECTURA.md` para el diseño completo y el roadmap.
 
 ## Requisitos
 
-- Linux 6.19 o superior (para que el kernel exponga el SL2)
-- Python 3.11+
-- PySide6 — instálalo desde la distro, no con pip:
-  - CachyOS / Arch: `sudo pacman -S pyside6`
-  - Fedora: `sudo dnf install python3-pyside6`
+Sólo hay **dos dependencias externas**, y las dos vienen empaquetadas en
+cualquier distribución. Todo lo demás es biblioteca estándar de Python.
+
+| | Para qué | CachyOS / Arch | Fedora |
+|---|---|---|---|
+| PySide6 | la interfaz | `pyside6` | `python3-pyside6` |
+| dbus-next | el demonio | `python-dbus-next` | `python3-dbus-next` |
+
+```bash
+sudo pacman -S pyside6 python-dbus-next      # CachyOS / Arch
+sudo dnf install python3-pyside6 python3-dbus-next   # Fedora
+```
+
+Además: Linux 6.19+ (para que el kernel exponga el SL2) y Python 3.11+.
+
+Instala PySide6 **desde la distro, no con pip**: los paquetes del sistema traen
+los plugins de Wayland ya configurados y se integran con el tema de tu escritorio.
+
+### Comprobar el ratón antes de nada
+
+`scan_hidpp.py` no necesita ninguna dependencia — ni siquiera PySide6. Sirve
+para saber si tu ratón se detecta antes de abrir la interfaz:
+
+```bash
+python3 scan_hidpp.py
+```
 
 ## Permisos
 
@@ -74,6 +95,8 @@ Si no aparece ningún ratón compatible, la interfaz lo dice y explica por qué
   `/proc` como respaldo
 - **Remapeo de botones** (0x1B04), respetando los grupos que permite el firmware
 - Ajusta la sensibilidad del puntero en KDE, también para ratones genéricos
+- Lee las versiones de firmware e integra la comprobación con **fwupd**
+  (actualizar firmware lo hace fwupd, no este programa — ver la pestaña Firmware)
 - Vuelca respuestas en crudo para decodificar features nuevas
 
 ## Qué falta

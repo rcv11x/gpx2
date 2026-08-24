@@ -86,6 +86,11 @@ class Tarjeta(QFrame):
         raiz.addLayout(self.cuerpo)
 
     def añadir(self, w: QWidget) -> None:
+        # Cualquier etiqueta que entre en una tarjeta se ajusta sola. Si no, un
+        # texto largo ensancha la tarjeta y aparece scroll horizontal en toda
+        # la ventana.
+        if isinstance(w, QLabel):
+            w.setWordWrap(True)
         self.cuerpo.addWidget(w)
 
     def añadir_layout(self, layout) -> None:

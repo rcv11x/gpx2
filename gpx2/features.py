@@ -378,3 +378,62 @@ class ReprogrammableControls(Capability):
 
     def restaurar(self, cid: int) -> None:
         self.remapear(cid, 0)
+
+
+# ---------------------------------------------------------------------------
+# Información del dispositivo / versiones de firmware
+# ---------------------------------------------------------------------------
+
+TIPOS_FIRMWARE = {
+    0: "Firmware principal",
+    1: "Bootloader",
+    2: "Hardware",
+    3: "Táctil",
+    4: "Óptico",
+    5: "Otro",
+}
+
+
+@dataclass
+class Firmware:
+    tipo: int
+    prefijo: str
+    numero: int
+    revision: int
+    build: int
+
+    @property
+    def nombre_tipo(self) -> str:
+        return TIPOS_FIRMWARE.get(self.tipo, f"Tipo {self.tipo}")
+
+    @property
+    def version(self) -> str:
+        # Formato de Logitech: PREFIJO NN.MM.BXXXX, con los números en BCD.
+        return f"{self.prefijo}{self.numero:02X}.{self.revision:02X}.B{self.build:04X}"
+
+
+class DeviceInfo(Capability):
+    """Feature 0x0003. Da las versiones de firmware y el identificador único.
+
+    Sólo lectura: aquí no se escribe nada nunca. Actualizar firmware es harina
+    de otro costal y no lo hace este programa (ver la pestaña de Firmware).
+    """
+    FID, TITULO, CONFIANZA = 0x0003, "Información del dispositivo", "verificada"
+
+    def entidades(self) -> int:
+        return self.call(0x00)[0]
+
+    def unit_id(self) -> str:
+        r = self.call(0x00)
+        return r[1:5].hex()
+
+    def firmwares(self) -> list[Firmware]:
+        salida = []
+        for i in range(self.entidades()):
+            r = self.call(0x01, bytes([i]))
+            salida.append(Firmware(
+                tipo=r[0],
+                prefijo=r[1:4].decode("ascii", "replace").strip("\x00"),
+                numero=r[4], revision=r[5],
+                build=int.from_bytes(r[6:8], "big")))
+        return salida

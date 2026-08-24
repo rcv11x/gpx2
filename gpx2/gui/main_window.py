@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
                                QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
 
-from .. import desktop
+from .. import desktop, firmware
 from ..client import ClienteDemonio
 from ..device import Discovery, Mouse, discover
 from ..engine import Motor
@@ -120,6 +120,7 @@ class PaginaRaton(QWidget):
         pestañas.addTab(_envolver(self._tab_rendimiento()), "Rendimiento")
         pestañas.addTab(_envolver(self._tab_botones()), "Botones")
         pestañas.addTab(_envolver(self._tab_perfiles()), "Perfiles")
+        pestañas.addTab(_envolver(self._tab_firmware()), "Firmware")
         pestañas.addTab(_envolver(self._tab_diagnostico()), "Diagnóstico")
         lay.addWidget(pestañas, 1)
 
@@ -324,6 +325,71 @@ class PaginaRaton(QWidget):
 
     def _tab_perfiles(self) -> QWidget:
         return PanelPerfiles(self.raton)
+
+    def _tab_firmware(self) -> QWidget:
+        tarjetas = []
+
+        t = Tarjeta("Versiones instaladas",
+                    "Leído del propio ratón con la feature 0x0003.")
+        if self.raton.info is None:
+            t.añadir(QLabel("Este dispositivo no expone la feature 0x0003."))
+        else:
+            try:
+                for f in self.raton.info.firmwares():
+                    fila = QHBoxLayout()
+                    etiqueta = QLabel(f.nombre_tipo)
+                    etiqueta.setMinimumWidth(190)
+                    fila.addWidget(etiqueta)
+                    valor = QLabel(f.version)
+                    fuente = QFont(valor.font())
+                    fuente.setStyleHint(QFont.StyleHint.Monospace)
+                    valor.setFont(fuente)
+                    valor.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse)
+                    fila.addWidget(valor)
+                    fila.addStretch(1)
+                    t.añadir_layout(fila)
+                t.añadir(QLabel(f"Identificador único: {self.raton.info.unit_id()}"))
+            except Exception as e:
+                t.añadir(QLabel(f"No se pudieron leer las versiones: {e}"))
+        tarjetas.append(t)
+
+        estado = firmware.resumen()
+        t2 = Tarjeta("Actualizar: lo hace fwupd, no este programa",
+                     "fwupd es la herramienta estándar de Linux para firmware. "
+                     "Descarga imágenes firmadas desde LVFS, implementa el modo "
+                     "DFU de HID++ y tiene ruta de recuperación si algo se "
+                     "corta. Reimplementar eso aquí sería la única parte del "
+                     "proyecto capaz de dejarte el ratón inservible, así que no "
+                     "se hace.")
+        t2.añadir(QLabel(estado["mensaje"]))
+        for d in estado.get("dispositivos", []):
+            marca = "actualizable" if d["actualizable"] else "sin actualizaciones disponibles"
+            t2.añadir(QLabel(f"  • {d['nombre']} — versión {d['version']} ({marca})"))
+
+        comprobar = QPushButton("Comprobar de nuevo")
+        comprobar.clicked.connect(lambda: QMessageBox.information(
+            self, "Comprobar actualizaciones",
+            "Para buscar actualizaciones de verdad, en la terminal:\n\n"
+            "    fwupdmgr refresh\n"
+            "    fwupdmgr get-updates\n"
+            "    fwupdmgr update\n\n"
+            "Se hace desde fuera a propósito: así el proceso que escribe en el "
+            "firmware es fwupd, que está preparado para ello, y no nosotros."))
+        t2.añadir(comprobar)
+        tarjetas.append(t2)
+
+        if not estado.get("dispositivos"):
+            tarjetas.append(Tarjeta(
+                "Si fwupd no reconoce tu ratón",
+                "Entonces hoy no se puede actualizar el firmware desde Linux de "
+                "forma segura, y el camino útil no es escribir un flasheador "
+                "propio: es añadir el dispositivo a fwupd, que es software libre "
+                "y acepta contribuciones. Hace falta el identificador del "
+                "dispositivo y alguien con el hardware para probar — o sea, tú. "
+                "Mientras tanto queda la herramienta web oficial de Logitech, "
+                "que funciona en Chrome sobre Linux con WebHID."))
+        return _columna(*tarjetas)
 
     def _tab_diagnostico(self) -> QWidget:
         t = Tarjeta("Capacidades que declara el ratón",

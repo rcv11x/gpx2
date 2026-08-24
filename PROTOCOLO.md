@@ -186,10 +186,21 @@ sin probar, en orden de lo barato que sale comprobarlas:
    **Descartada.** Se escribieron 4000 Hz sin restaurar, se apagó y encendió el
    ratón, y la función 2 seguía devolviendo el índice 3 (1000 Hz). La orden no
    se guarda en ninguna parte.
-2. **La tasa la manda el perfil onboard.** Su primer byte es la tasa de reporte,
-   y puede que el enlace la coja de ahí al conectarse — lo que explicaría que
-   escribir por 0x8061 no sirva de nada estando en modo host. Pendiente de
-   volcar la memoria de perfiles y mirarlo (`depurar.py` lo hace, sólo lee).
+2. **La tasa la manda el perfil onboard.** Su primer byte es la tasa de reporte
+   como índice, y vale 3 — los mismos 1000 Hz a los que está el ratón. Que
+   escribir por `0x8061` en modo host no haga nada encaja con que el enlace la
+   coja de ahí.
+
+   Probado escribir la tasa **estando en modo onboard**: el ratón responde
+   entonces **error 0x02 (parámetro inválido)** en vez de aceptarla en silencio,
+   y el byte del perfil no cambia. Son dos comportamientos distintos según el
+   modo, así que el modo influye, pero por esta vía tampoco entra.
+
+   Lo que queda es **escribir el perfil en memoria** (función 6 de `0x8100`):
+   leer el sector entero, cambiar el primer byte, recalcular el CRC16 y
+   reescribirlo. Es lo que hace G HUB en Windows. No toca firmware, así que no
+   puede dejar el ratón inservible, pero sí corromper sus perfiles; haría falta
+   guardar antes una copia del sector y tener a mano `0x1802` (reinicio).
 3. **Hay que configurar el receptor, no el ratón.** El receptor habla HID++ 1.0
    por registros, no por features, así que sería otro camino entero.
 

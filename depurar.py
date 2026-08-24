@@ -456,6 +456,34 @@ def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None,
         s.llamar(0x8100, 0x01, b"\x01")
         ahora = s.llamar(0x8100, 0x02)
         print(f"     modo: 0x{ahora[0]:02X}" if ahora else "     no se pudo leer")
+
+        # Lo que declara el ratón puede depender del modo: si en onboard la
+        # lista se encoge, sabremos que el perfil la está limitando.
+        print("\n  Lo que declara ahora, en onboard:")
+        for et, par in (("f0 cable", b"\x00"), ("f0 inalámbrico", b"\x01")):
+            r = s.llamar(0x8061, 0x00, par)
+            if r:
+                bm = int.from_bytes(r[0:2], "big")
+                print(f"     {et:16} {hx(r[:2])}  -> "
+                      f"{[MAPEO_HZ[n] for n in range(7) if bm & (1 << n)]}")
+        r = s.llamar(0x8061, 0x01)
+        if r:
+            bm = int.from_bytes(r[0:2], "big")
+            print(f"     {'f1 lista':16} {hx(r[:2])}  -> "
+                  f"{[MAPEO_HZ[n] for n in range(7) if bm & (1 << n)]}")
+        r = s.llamar(0x8061, 0x02)
+        if r:
+            print(f"     {'f2 actual':16} índice {r[0]}")
+
+        # ¿Acepta al menos un índice que seguro está permitido?
+        print("\n  Probando un índice bajo (2 = 500 Hz), que admiten las dos vías:")
+        try:
+            s.hpp.call(s.tabla[0x8061].index, 0x03, bytes([2]))
+            r = s.llamar(0x8061, 0x02)
+            print(f"     f3 [02] -> f2 dice índice {r[0] if r else '?'}"
+                  + ("  ← ENTRA" if r and r[0] == 2 else "  (no entra)"))
+        except (HidppError, NoResponse, OSError) as e:
+            print(f"     f3 [02] -> ⚠ {e}")
         print()
 
     def probar(etiqueta: str, params: bytes) -> bool:

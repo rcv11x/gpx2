@@ -178,43 +178,36 @@ función 1 declara ahí. **A Solaar le pasa lo mismo**:
 —que hace con `read(cached=False)`, contra el dispositivo— sigue devolviendo
 `1ms`. Sin resolver.
 
-### Sin resolver: el hardware sí puede, falta saber cómo se pide
+### RESUELTO: hace falta desbloquear las features ocultas
 
-Medida la tasa real con `depurar.py --medir`, que cronometra los informes que
-llegan al kernel: **1000 Hz exactos**, 4484 intervalos con mediana de 1,000 ms.
-
-Se dio por cerrado como límite del receptor, y **era una conclusión precipitada**:
-estaba deducida, no medida. Mirando el árbol USB resulta que no se sostiene.
+`0x8061` función 3 **no aplica nada por receptor** si se llama a secas. La
+orden se acepta sin error y el enlace sigue igual. Lo que faltaba es abrir
+antes la feature **`0x1E00` (Enable Hidden Features)**:
 
 ```
-046d:c54d   velocidad 480 Mb/s (high-speed)
-  1-3.2.2:1.0  ep_81  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
-  1-3.2.2:1.1  ep_82  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
-  1-3.2.2:1.2  ep_83  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
+0x1E00 función 1 con 0x01      -> desbloquea
+0x8061 función 3 con [índice]  -> AHORA SÍ cambia el enlace
+0x1E00 función 1 con 0x00      -> vuelve a cerrar
 ```
 
-En USB *high-speed* el intervalo del endpoint es `2^(bInterval-1) x 125 us`. Un
-receptor de 1 kHz declararía `bInterval=4`. Éste declara **1**, o sea que el
-anfitrión lo sondea cada 125 µs y su lado USB está preparado para 8000 Hz.
+Medido con `depurar.py --medir`, que cronometra los informes que llegan al
+kernel y no le pregunta nada al ratón:
 
-Con eso, lo que sabemos es:
+| | intervalo típico | tasa |
+|---|---|---|
+| antes | 1,000 ms (4486 informes en 5 s) | 1000 Hz |
+| después de escribir el índice 5 | **0,250 ms** (16478 informes) | **4000 Hz** |
 
-- el rato&#769;n dice que sabe llegar a 8000 sin cable (`0x7f`);
-- el receptor tiene endpoints de 125 µs, así que tampoco topa por USB;
-- y sin embargo sólo llegan 1000 informes por segundo.
+El cambio **sobrevive a volver a cerrar `0x1E00`**.
 
-El límite está en **cómo se configura el enlace de radio**, y ésa es la pieza
-que no hemos encontrado. Las vías que quedan por explorar:
+> **Ojo: la función 2 miente.** Después de cambiar la tasa sigue devolviendo
+> el índice anterior. Por eso dimos por fallido el intento durante toda una
+> sesión: mirábamos lo que el ratón decía en vez de lo que hacía. La única
+> comprobación válida es cronometrar los informes.
 
-1. **Los registros del receptor.** Habla HID++ 1.0 por registros, no por
-   features, y expone tres interfaces (`hidraw6`, `hidraw8`, `hidraw9` en este
-   equipo) de las que sólo hemos hablado con una.
-2. **Escribir el perfil onboard.** Su primer byte es la tasa como índice, y es
-   lo que toca G HUB en Windows.
-
-Lo que **está descartado**: que lo impida el modo onboard/host, que la escritura
-se guarde para aplicarse al reconectar, y que el cable sirva de algo (por ahí el
-tope son 1000 Hz de verdad, y ahí sí se puede escribir).
+Esto no está documentado en ningún sitio, y Solaar no lo hace: define la
+constante `ENABLE_HIDDEN_FEATURES` y no la usa nunca. Es la razón de que a
+Solaar tampoco le funcione cambiar la tasa en este ratón.
 
 Por eso `ExtendedReportRate.set()` **relee y lanza `EscrituraIgnorada`** si el
 valor no cambió: sin eso, la interfaz enseñaría una tasa que el ratón no tiene.

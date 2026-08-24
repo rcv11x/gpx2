@@ -771,6 +771,65 @@ def bloque_un_registro(nodo_forzado: str | None, direccion: int) -> None:
         canal.close()
 
 
+def poner_tasa(s: Sonda, hz: int) -> bool:
+    """Cambia la tasa de reporte de verdad, abriendo antes las features ocultas.
+
+    Éste es el hallazgo de la sesión: `0x8061` función 3 no aplica nada por
+    receptor salvo que antes se desbloquee `0x1E00`. Con eso abierto, el
+    enlace cambia de verdad — medido: de 1,000 ms a 0,250 ms de intervalo.
+
+    Y hay que saber que **la función 2 miente**: después de cambiar la tasa
+    sigue devolviendo el índice anterior. La única forma de comprobarlo es
+    cronometrar los informes que llegan al kernel.
+    """
+    MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
+    if hz not in MAPEO_HZ:
+        print(f"  {hz} Hz no está en la tabla: {MAPEO_HZ}")
+        return False
+    idx = MAPEO_HZ.index(hz)
+
+    abierto_antes = False
+    if s.tiene(0x1E00):
+        r = s.llamar(0x1E00, 0x00)
+        abierto_antes = bool(r and r[0])
+        if not abierto_antes:
+            s.llamar(0x1E00, 0x01, b"\x01")
+            r = s.llamar(0x1E00, 0x00)
+            if not (r and r[0]):
+                print("  No se pudieron abrir las features ocultas.")
+                return False
+    try:
+        s.hpp.call(s.tabla[0x8061].index, 0x03, bytes([idx]))
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"  la escritura falló: {e}")
+        return False
+    finally:
+        if s.tiene(0x1E00) and not abierto_antes:
+            try:
+                s.hpp.call(s.tabla[0x1E00].index, 0x01, b"\x00")
+            except (HidppError, NoResponse, OSError):
+                pass
+    return True
+
+
+def bloque_poner_tasa(s: Sonda, hz: int, segundos: float) -> None:
+    titulo(f"PONER LA TASA A {hz} Hz")
+    print("  Se abren las features ocultas (0x1E00), se escribe, y se vuelven")
+    print("  a cerrar. Después se mide, porque la función 2 no es de fiar.\n")
+
+    if not poner_tasa(s, hz):
+        return
+    print(f"  Escrito. La función 2 dice ahora: "
+          f"{(s.llamar(0x8061, 0x02) or [b'?'])[0]}  (no te fíes)")
+
+    punteros = punteros_del_sistema()
+    logitech = [p[0] for p in punteros if p[2].startswith("046d")]
+    if not logitech:
+        print("\n  No se encontró el puntero para medir.")
+        return
+    medir_tasa(logitech[0], segundos)
+
+
 def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
     """Desbloquea las features internas y reintenta escribir la tasa.
 
@@ -1604,6 +1663,8 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--poner-tasa", type=int, metavar="HZ",
+                    help="cambia la tasa de reporte de verdad y la mide")
     ap.add_argument("--features-ocultas", action="store_true",
                     help="abre las features internas (0x1E00) y reintenta "
                          "escribir la tasa; lo deja como estaba al salir")
@@ -1666,6 +1727,11 @@ def main() -> int:
         return 1
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
+
+    if args.poner_tasa:
+        bloque_poner_tasa(s, args.poner_tasa, args.medir or 5.0)
+        ch.close()
+        return 0
 
     if args.features_ocultas:
         bloque_features_ocultas(s, args.hz or 4000)

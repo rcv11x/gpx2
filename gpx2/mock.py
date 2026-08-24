@@ -27,6 +27,7 @@ NOMBRE = "PRO X SUPERLIGHT 2"
 TABLA = [
     0x0000, 0x0001, 0x0003, 0x0005, 0x0020, 0x1004, 0x1B04,
     0x2202, 0x8061, 0x8090, 0x8100, 0x00C2, 0x1802, 0x1814, 0x8111,
+    0x1E00,
 ]
 TIPOS = {0x0001: 0x00, 0x0003: 0x00, 0x00C2: 0x20, 0x1802: 0x20, 0x8111: 0x20}
 VERSIONES = {0x0005: 1, 0x1004: 0, 0x1B04: 5, 0x2202: 2, 0x8061: 0, 0x8100: 1}
@@ -100,6 +101,7 @@ class CanalSimulado:
         self.indices = {fid: i for i, fid in enumerate(TABLA)}
         self.remapeos: dict[int, int] = {}
         self.modo_onboard = 0x01        # arranca en onboard, como el real
+        self.ocultas = False            # 0x1E00, cerradas de fábrica
         self.sectores: dict[int, bytes] = {}
         self._escribiendo: tuple[int, bytes] = (0, b"")
 
@@ -207,11 +209,17 @@ class CanalSimulado:
             if func == 0x01:                                # lista global
                 return b"\x00\x7F"
             if func == 0x02:                                # tasa actual
-                return bytes([self.hz_idx])
+                # MIENTE, igual que el hardware: devuelve el índice con el que
+                # arrancó aunque el enlace ya vaya a otra cosa. Es lo que hizo
+                # que diéramos por fallido el cambio durante toda una sesión.
+                return bytes([HZ_INDICE])
             if func == 0x03:                                # fijar tasa
-                # Comportamiento real del PRO X 2 por receptor: contesta "sin
-                # error" y NO cambia nada. Solaar tropieza con lo mismo. Se
-                # reproduce aquí para que el caso quede cubierto sin hardware.
+                # Comportamiento real del PRO X 2: por receptor sólo entra si
+                # antes se han desbloqueado las features ocultas (0x1E00).
+                # Sin eso contesta "sin error" y no cambia nada, que es lo que
+                # despistó durante toda una sesión.
+                if self.ocultas:
+                    self.hz_idx = params[0]
                 return b"\x00"
 
         if fid == 0x0003:                                   # info y firmware
@@ -247,6 +255,13 @@ class CanalSimulado:
 
         if fid == 0x8090 and func == 0x00:                  # modo
             return b"\x00\x00"                              # arranca en onboard
+
+        if fid == 0x1E00:                                   # features ocultas
+            if func == 0x00:
+                return bytes([1 if self.ocultas else 0])
+            if func == 0x01:
+                self.ocultas = bool(params[0])
+                return b"\x00"
 
         if fid == 0x8100:                                   # perfiles onboard
             if func == 0x00:                                # getOnboardProfilesInfo

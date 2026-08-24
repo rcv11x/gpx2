@@ -339,6 +339,10 @@ class ExtendedReportRate(Capability):
     # misma tabla que usa Solaar, traducida a frecuencia.
     MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
 
+    def __init__(self, hpp):
+        super().__init__(hpp)
+        self._ultima: int | None = None
+
     def _conexion_actual(self) -> int:
         """Por cable y por receptor el ratón admite tasas distintas."""
         return self.WIRED if self.hpp.index == IDX_DIRECT else self.WIRELESS
@@ -375,22 +379,66 @@ class ExtendedReportRate(Capability):
 
         idx = self.call(self.F_LEER)[0]
         actual = self.MAPEO_HZ[idx] if idx < len(self.MAPEO_HZ) else 0
+        # La función 2 no se entera de los cambios: si hemos escrito una tasa
+        # en esta sesión, vale más lo que escribimos que lo que contesta.
+        if self._ultima is not None:
+            actual = self._ultima
         return RateInfo(actual, aqui, alla)
+
+    FID_OCULTAS = 0x1E00
+
+    def _abrir_ocultas(self) -> bool | None:
+        """Desbloquea las features internas. Devuelve si estaban ya abiertas.
+
+        Sin esto, escribir la tasa por receptor se acepta sin error y el
+        enlace no cambia. Con esto, cambia de verdad: medido en un PRO X 2,
+        el intervalo pasa de 1,000 ms a 0,125 ms. Está en PROTOCOLO.md.
+
+        None si el ratón no tiene la feature.
+        """
+        if not self.hpp.has(self.FID_OCULTAS):
+            return None
+        idx = self.hpp.of(self.FID_OCULTAS)
+        try:
+            ya = bool(self.hpp.call(idx, 0x00)[0])
+            if not ya:
+                self.hpp.call(idx, 0x01, b"\x01")
+            return ya
+        except (HidppError, NoResponse, OSError):
+            return None
+
+    def _cerrar_ocultas(self, estaban_abiertas: bool | None) -> None:
+        if estaban_abiertas is not False:
+            return          # no las abrimos nosotros, o no existen
+        try:
+            self.hpp.call(self.hpp.of(self.FID_OCULTAS), 0x01, b"\x00")
+        except (HidppError, NoResponse, OSError):
+            pass
 
     def set(self, hz: int) -> None:
         idx = self.MAPEO_HZ.index(hz)
-        self.call(self.F_ESCRIBIR, bytes([idx]))
-        # Comprobado en un PRO X 2: por receptor contesta "sin error" y no
-        # cambia nada, y a Solaar le pasa lo mismo. Si no releyéramos, la
-        # interfaz se quedaría mostrando un valor que el ratón no tiene.
-        leido = self.call(self.F_LEER)[0]
-        if leido != idx:
-            actual = self.MAPEO_HZ[leido] if leido < len(self.MAPEO_HZ) else "?"
-            raise EscrituraIgnorada(
-                f"el ratón aceptó la orden pero sigue a {actual} Hz. "
-                "Tanto el ratón como el receptor dicen poder con tasas más "
-                "altas, pero el enlace inalámbrico se queda donde está y aún no "
-                "sabemos cómo se le pide que suba. A Solaar le pasa lo mismo.")
+        previo = self._abrir_ocultas()
+        try:
+            self.call(self.F_ESCRIBIR, bytes([idx]))
+        finally:
+            self._cerrar_ocultas(previo)
+
+        # No se comprueba releyendo: la función 2 devuelve el índice anterior
+        # aunque el enlace haya cambiado de verdad. Costó una sesión entera
+        # descubrirlo, y sólo se ve cronometrando los informes que llegan al
+        # kernel (`depurar.py --medir`). Se recuerda lo escrito para no
+        # enseñar después un valor que sabemos que es falso.
+        self._ultima = hz
+        if previo is None:
+            # Sin 0x1E00 no hay forma de desbloquear, y ahí la función 2 sí
+            # es el único indicio que tenemos.
+            leido = self.call(self.F_LEER)[0]
+            if leido != idx:
+                actual = (self.MAPEO_HZ[leido] if leido < len(self.MAPEO_HZ)
+                          else "?")
+                raise EscrituraIgnorada(
+                    f"el ratón aceptó la orden pero sigue a {actual} Hz, y no "
+                    "expone la feature que desbloquea el cambio (0x1E00).")
 
 
 # ---------------------------------------------------------------------------

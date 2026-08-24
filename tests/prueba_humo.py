@@ -48,7 +48,7 @@ def main() -> int:
               "y las de la otra vía")
     comprobar(estado["battery"].percent == 78, "lee la batería")
     comprobar(estado["onboard"].startswith("onboard"), "lee el modo onboard/host")
-    comprobar(len(raton.feature_table) == 15, "enumera la tabla de features")
+    comprobar(len(raton.feature_table) == 16, "enumera la tabla de features")
     comprobar(not estado["errores"], "sin errores al construir el dispositivo")
 
     print("2. Escritura")
@@ -57,16 +57,18 @@ def main() -> int:
     # 12345 no es un valor válido del sensor: hay que ajustarlo al más cercano.
     raton.dpi.set(12345)
     comprobar(raton.dpi.get().actual == 12300, "ajusta al DPI válido más cercano")
-    # El ratón real acepta la orden y no la aplica; hay que detectarlo, no
-    # dar por bueno que no hubo excepción.
-    try:
-        raton.rate.set(500)
-        ignorada = None
-    except EscrituraIgnorada as e:
-        ignorada = str(e)
-    comprobar(ignorada is not None, "detecta que el ratón ignoró la tasa")
-    comprobar(ignorada and "enlace" in ignorada, "y explica por qué al usuario")
-    comprobar(raton.rate.get().actual_hz == 1000, "la tasa sigue donde estaba")
+    # La tasa sólo entra si antes se desbloquean las features ocultas (0x1E00).
+    # Sin eso el ratón acepta la orden y no cambia nada.
+    canal = raton.ch
+    raton.rate.set(8000)
+    comprobar(canal.hz_idx == 6, "cambia la tasa desbloqueando las ocultas")
+    comprobar(not canal.ocultas, "y las vuelve a cerrar al terminar")
+    # La función 2 devuelve el índice viejo aunque el enlace haya cambiado:
+    # fiarse de ella fue lo que hizo dar por fallido el cambio.
+    comprobar(raton.rate.call(0x02)[0] == 3, "la función 2 sigue mintiendo")
+    comprobar(raton.rate.get().actual_hz == 8000,
+              "pero se recuerda lo escrito y se enseña bien")
+    raton.rate.set(1000)
     comprobar(raton.onboard.set_host(True), "pasa el ratón a modo host")
     comprobar(raton.onboard.set_host(False), "y lo devuelve a modo onboard")
     # Tras reconectarse el ratón vuelve a onboard y rechaza las escrituras con
@@ -116,13 +118,20 @@ def main() -> int:
         comprobar(raton.dpi.get().actual == 800, "y lo repone")
 
         comprobar(motor.perfil_activo == "shooter", "recuerda el perfil activo")
-        # La tasa no se puede escribir por receptor: se anota una vez y no se
-        # reintenta en cada comprobación.
-        otro = Perfil(nombre="Alta", ajustes=Ajustes(report_rate_hz=500))
-        fallos_1 = [c for c in motor.aplicar(otro) if not c.ok]
-        comprobar(len(fallos_1) == 1, "informa una vez de lo que no se puede")
-        comprobar("report_rate_hz" in motor.imposibles, "y lo recuerda")
-        comprobar(motor.aplicar(otro) == [], "no lo reintenta sin parar")
+
+        # La tasa sí se aplica desde un perfil, ahora que sabemos desbloquearla.
+        alta = Perfil(nombre="Alta", ajustes=Ajustes(report_rate_hz=4000))
+        cambios = motor.aplicar(alta)
+        comprobar(all(c.ok for c in cambios), "aplica la tasa desde un perfil")
+        comprobar(raton.ch.hz_idx == 5, "y el enlace queda a 4000 Hz")
+
+        # Y si un ratón no admite un ajuste, se anota para no reintentarlo en
+        # cada comprobación y llenar el registro de errores repetidos.
+        motor.imposibles.add("dpi")
+        comprobar(motor.aplicar(almacen.obtener("escritorio")) == []
+                  or all(c.ajuste != "dpi" for c in
+                         motor.aplicar(almacen.obtener("escritorio"))),
+                  "no reintenta lo que el ratón no admite")
 
     print("6. Perfiles en la memoria del ratón (0x8100, formato 0x07)")
     from gpx2.onboard import (ACCIONES, crc16_ccitt, describir_boton,

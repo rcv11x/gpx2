@@ -504,6 +504,15 @@ class PaginaRaton(QWidget):
                 t.añadir(QLabel(
                     f"Por esta conexión tu ratón llega a {max(rate.disponibles)} Hz. "
                     f"{via.capitalize()} admitiría hasta {max(otra)} Hz."))
+            # El ratón no informa de la tasa que tiene puesta: su función de
+            # lectura sigue devolviendo la anterior. Se enseña lo último que
+            # hemos escrito, y se dice cómo comprobarlo de verdad.
+            nota = QLabel("El ratón no informa de la tasa que tiene puesta, así "
+                          "que aquí se muestra la última que se le ha pedido. "
+                          "Para medir la real: python3 depurar.py --medir")
+            nota.setObjectName("Suave")
+            nota.setWordWrap(True)
+            t.añadir(nota)
             combo.currentIndexChanged.connect(
                 lambda i, c=combo: self._set_rate(c.itemData(i)))
             self._combo_rate = combo

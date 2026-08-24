@@ -725,6 +725,52 @@ def bloque_registros(nodo_forzado: str | None, todos: bool = False) -> None:
         canal.close()
 
 
+def bloque_un_registro(nodo_forzado: str | None, direccion: int) -> None:
+    """Barre el primer parámetro de un registro concreto, de 0 a 255.
+
+    Varios registros contestan "parámetro no admitido" o "error de recursos"
+    cuando se les pregunta en seco: existen, pero llevan un subregistro. La
+    única forma de saber cuáles acepta es probarlos. Sólo lee.
+    """
+    titulo(f"REGISTRO 0x{direccion:02X} — barrido de parámetros")
+
+    candidatos = [n for n in enumerate_nodes()
+                  if n.hidpp and n.is_logitech
+                  and (not nodo_forzado or n.path == nodo_forzado)]
+    for nodo in candidatos:
+        canal = RawChannel(nodo.path)
+        hpp1 = Hidpp10(canal, 0xFF)
+        try:
+            hpp1.leer(0x00, timeout=0.3)
+        except (HidppError, NoResponse, OSError):
+            canal.close()
+            continue
+
+        print(f"  == {nodo.path}  ({nodo.id_str}) ==")
+        print(f"  {REGISTROS.get(direccion, 'sin documentar')}\n")
+        vistos = 0
+        for etiqueta, leer in (("corto", hpp1.leer), ("largo", hpp1.leer_largo)):
+            respuestas: dict[bytes, list[int]] = {}
+            for p in range(0x100):
+                try:
+                    r = leer(direccion, bytes([p, 0, 0]), timeout=0.2)
+                except (HidppError, NoResponse, OSError):
+                    continue
+                respuestas.setdefault(bytes(r[:16]), []).append(p)
+            for datos, params in respuestas.items():
+                # Los parámetros que dan lo mismo se agrupan: si un registro
+                # ignora el subregistro, se vería como 256 líneas idénticas.
+                if len(params) > 8:
+                    cual = f"{len(params)} valores (0x{params[0]:02X}…0x{params[-1]:02X})"
+                else:
+                    cual = ", ".join(f"0x{p:02X}" for p in params)
+                print(f"     {etiqueta:5} param {cual:34} -> {hx(datos)}")
+                vistos += 1
+        if not vistos:
+            print("     ningún parámetro dio respuesta")
+        canal.close()
+
+
 def bloque_medir(segundos: float) -> None:
     titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
     punteros = punteros_del_sistema()
@@ -1485,6 +1531,8 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--registro", metavar="0xNN",
+                    help="barre los parámetros de un registro concreto")
     ap.add_argument("--registros", action="store_true",
                     help="barre los registros HID++ 1.0 del receptor (sólo lee)")
     ap.add_argument("--todos-los-registros", action="store_true",
@@ -1507,6 +1555,10 @@ def main() -> int:
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
+
+    if args.registro:
+        bloque_un_registro(args.nodo, int(args.registro, 0))
+        return 0
 
     if args.registros or args.todos_los_registros:
         bloque_registros(args.nodo, args.todos_los_registros)

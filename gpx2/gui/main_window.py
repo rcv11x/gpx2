@@ -214,6 +214,11 @@ class PaginaRaton(QWidget):
         # primero que uno quiere ver, y estaba escondido en otra pestaña.
         # Va en pastilla porque es un estado que cambia solo; la batería no,
         # que es un dato y punto: en pastilla parecía un botón sin función.
+        self.lbl_perfil = QLabel("Perfil:")
+        self.lbl_perfil.setObjectName("Suave")
+        self.lbl_perfil.setVisible(False)
+        lay.addWidget(self.lbl_perfil, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.pastilla_perfil = pastilla("")
         self.pastilla_perfil.setObjectName("PastillaPerfil")
         self.pastilla_perfil.setVisible(False)
@@ -258,9 +263,14 @@ class PaginaRaton(QWidget):
         if pastilla_ is None:
             return
         perfil = self._perfil_activo()
+        etiqueta = getattr(self, "lbl_perfil", None)
         if perfil is None:
             pastilla_.setVisible(False)
+            if etiqueta is not None:
+                etiqueta.setVisible(False)
             return
+        if etiqueta is not None:
+            etiqueta.setVisible(True)
         pastilla_.setText(f"⬢ {perfil.nombre}")
         pastilla_.setToolTip(
             "Perfil que manda ahora mismo. Se cambia en la pestaña Perfiles.")
@@ -1456,12 +1466,11 @@ class VentanaPrincipal(QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.lista.currentItemChanged.connect(self._seleccion)
         lat.addWidget(self.lista)
+        lat.addStretch(1)
 
         self.btn_rescan = QPushButton("Volver a escanear")
-        self.btn_rescan.setFlat(True)
         self.btn_rescan.clicked.connect(self.escanear)
         lat.addWidget(self.btn_rescan)
-        lat.addStretch(1)
 
         self.pila = QStackedWidget()
         self.vacia = PaginaVacia(self.escanear)

@@ -133,12 +133,19 @@ class DialogoJuegos(QDialog):
 
     # -- procesos -------------------------------------------------------------
 
-    def _hueco(self) -> QIcon:
-        """Un icono transparente del mismo tamaño.
+    def _hueco(self, juego: bool) -> QIcon:
+        """Qué poner cuando Steam no tiene la carátula descargada.
 
-        Sin esto, las filas sin carátula empiezan más a la izquierda que las
-        demás y el borde del texto queda irregular.
+        Un rectángulo vacío parece que algo ha fallado. Para un juego se usa
+        el icono de juegos del propio tema, que se lee como "no hay imagen" y
+        no como "error"; para lo que no es un juego, un hueco transparente,
+        que si no el texto de unas filas empieza más a la izquierda que el de
+        otras y el borde queda irregular.
         """
+        if juego:
+            icono = QIcon.fromTheme("applications-games")
+            if not icono.isNull():
+                return icono
         if self._icono_vacio is None:
             pm = QPixmap(self.lista_procesos.iconSize())
             pm.fill(Qt.GlobalColor.transparent)
@@ -171,7 +178,8 @@ class DialogoJuegos(QDialog):
                 sufijo = "   (abierto)" if c.probable else ""
             item = QListWidgetItem(marca + c.etiqueta + sufijo)
             imagen = caratula(c.steam_appid) if c.steam_appid else None
-            item.setIcon(QIcon(imagen) if imagen else self._hueco())
+            item.setIcon(QIcon(imagen) if imagen
+                         else self._hueco(bool(c.steam_appid)))
             item.setToolTip(c.exe or f"Steam {c.steam_appid}")
             item.setData(ROL_VALOR,
                          ("steam", c.steam_appid) if c.steam_appid

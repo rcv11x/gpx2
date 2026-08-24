@@ -2,16 +2,22 @@
 """
 Ratón simulado.
 
-Implementa el mismo contrato que `RawChannel` pero respondiendo como lo haría
-un G Pro X Superlight 2. Sirve para dos cosas:
+Implementa el mismo contrato que `RawChannel`, pero contestando lo que
+contestaría un ratón de verdad. Sirve para dos cosas:
 
   * desarrollar la interfaz sin tener el ratón delante;
   * tener un banco de pruebas donde comprobar el decodificador de cada feature
     contra una respuesta conocida.
 
-Cuando tengamos volcados reales del ratón, se pegan aquí y el simulador pasa a
-ser una réplica fiel: a partir de ese momento cualquier fallo de decodificación
-se reproduce sin hardware.
+Lo que responde no está aquí: sale de `modelos.py`, donde cada ratón es un
+`Modelo` copiado de su volcado. Este fichero sólo sabe de protocolo. Así,
+añadir un ratón nuevo —de alguien que mande su informe— no toca este código.
+
+Los ratones simulados reproducen también **las mentiras del hardware**. El
+PRO X 2 contesta "sin error" a escrituras que ignora, y su función 2 de 0x8061
+devuelve siempre el índice con el que arrancó. Un simulador que se portara
+mejor que el aparato serviría para confirmar nuestros errores, no para
+encontrarlos.
 """
 
 from __future__ import annotations
@@ -19,86 +25,21 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from .device import Mouse
+from .modelos import SL2, Modelo
 from .transport import HidrawNode
-
-NOMBRE = "PRO X SUPERLIGHT 2"
-
-# Tabla de features que declararía el ratón, en orden de índice.
-TABLA = [
-    0x0000, 0x0001, 0x0003, 0x0005, 0x0020, 0x1004, 0x1B04,
-    0x2202, 0x8061, 0x8090, 0x8100, 0x00C2, 0x1802, 0x1814, 0x8111,
-    0x1E00,
-]
-TIPOS = {0x0001: 0x00, 0x0003: 0x00, 0x00C2: 0x20, 0x1802: 0x20, 0x8111: 0x20}
-VERSIONES = {0x0005: 1, 0x1004: 0, 0x1B04: 5, 0x2202: 2, 0x8061: 0, 0x8100: 1}
-
-DPI_ACTUAL, DPI_DEFECTO, LOD = 800, 800, 0x02
-
-# Páginas de getSensorDpiRanges (0x2202 f2), copiadas literalmente del
-# PRO X 2 (volcado 2026-08-24). Cada página aporta 13 bytes al MISMO flujo:
-# un valor puede quedar partido entre dos, por eso la página 0 acaba en 0x03
-# y la 1 empieza en 0xe8 (juntos, 0x03E8 = 1000).
-# El flujo describe: 100 · paso 1 →200 · paso 2 →500 · paso 5 →1000 ·
-# paso 10 →2000 · paso 20 →5000 · paso 50 →10000 · paso 100 →20000 ·
-# paso 125 →32000 · paso 200 →44000.
-RANGOS_PAGINAS = [
-    bytes.fromhex("0064 e001 00c8 e002 01f4 e005 03".replace(" ", "")),
-    bytes.fromhex("e8 e00a 07d0 e014 1388 e032 2710".replace(" ", "")),
-    bytes.fromhex("e064 4e20 e07d 7d00 e0c8 abe0 00".replace(" ", "")),
-    bytes(13),
-]
-
-# El sector del perfil 1, copia literal del volcado del PRO X 2 (2026-08-24).
-# El directorio (sector 0) apunta a cuatro perfiles; sólo el primero está
-# habilitado, y los otros tres son copias suyas.
-SECTOR_PERFIL = bytes.fromhex(
-    "030300002003200302b004b004024006"
-    "4006026009600902800c800c02000000"
-    "00ff00ffffffffffffffffff3c002c01"
-    "80010001800100028001000480010008"
-    "80010010ffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "ffffffffffffffffffffffffffffffff"
-    "0300000000001f400000000300000000"
-    "001f400000000300000000001f403200"
-    "000300000000001f403200000384db"
-)
-DIRECTORIO = bytes.fromhex("00010100" "00020000" "00030000" "00040000")
-
-# Los cinco DPI del perfil onboard y su distancia de despegue (0x2202 f3 y f4).
-DPI_NIVELES = [800, 1200, 1600, 2400, 3200]
-
-HZ_INDICE = 3                      # índice 3 = 1000 Hz (tope por receptor)
-BATERIA = (78, 8, 0, 0)            # volcado real: 78%, nivel 8 (lleno)
-
-# Botones que declararía el ratón: (cid, task_id, flags, pos, group, gmask)
-#   flags 0x01 botón de ratón | 0x10 reprogramable | 0x20 divertible
-# El clic izquierdo y el derecho tienen gmask 0: el firmware no deja moverlos.
-BOTONES = [
-    (0x0050, 0x0038, 0x11, 0, 1, 0x00),
-    (0x0051, 0x0039, 0x11, 0, 2, 0x00),
-    (0x0052, 0x003A, 0x31, 0, 3, 0x07),
-    (0x0053, 0x003C, 0x31, 0, 3, 0x07),
-    (0x0056, 0x003E, 0x31, 0, 3, 0x07),
-    (0x00C3, 0x00C3, 0x31, 0, 3, 0x07),
-]
 
 
 class CanalSimulado:
     """Habla el mismo protocolo que un /dev/hidraw real, pero de mentira."""
 
-    def __init__(self):
+    def __init__(self, modelo: Modelo = SL2):
+        self.m = modelo
         self.cola: list[bytes] = []
-        self.dpi = DPI_ACTUAL
-        self.lod = LOD
-        self.hz_idx = HZ_INDICE
-        self.indices = {fid: i for i, fid in enumerate(TABLA)}
+        self.dpi = modelo.dpi_actual
+        self.lod = modelo.lod
+        self.hz_idx = modelo.hz_indice
+        self.ms = modelo.ms_actual
+        self.indices = {fid: i for i, fid in enumerate(modelo.tabla)}
         self.remapeos: dict[int, int] = {}
         self.modo_onboard = 0x01        # arranca en onboard, como el real
         self.ocultas = False            # 0x1E00, cerradas de fábrica
@@ -133,36 +74,49 @@ class CanalSimulado:
     # -- lógica del dispositivo ----------------------------------------------
 
     def _responder(self, fidx: int, func: int, params: bytes) -> bytes:
-        fid = TABLA[fidx] if fidx < len(TABLA) else None
+        m = self.m
+        fid = m.tabla[fidx] if fidx < len(m.tabla) else None
 
         if fid == 0x0000:                                   # IRoot
             if func == 0x00:                                # getFeature
                 pedido = int.from_bytes(params[0:2], "big")
                 if pedido not in self.indices:
                     return b"\x00\x00\x00"
-                return bytes([self.indices[pedido], TIPOS.get(pedido, 0),
-                              VERSIONES.get(pedido, 0)])
+                return bytes([self.indices[pedido], m.tipos.get(pedido, 0),
+                              m.versiones.get(pedido, 0)])
             if func == 0x01:                                # ping
                 return bytes([4, 2, params[2] if len(params) > 2 else 0])
 
         if fid == 0x0001:                                   # IFeatureSet
             if func == 0x00:
-                return bytes([len(TABLA) - 1])
+                return bytes([len(m.tabla) - 1])
             if func == 0x01:
-                i = params[0]
-                f = TABLA[i]
-                return f.to_bytes(2, "big") + bytes([TIPOS.get(f, 0),
-                                                     VERSIONES.get(f, 0)])
+                f = m.tabla[params[0]]
+                return f.to_bytes(2, "big") + bytes([m.tipos.get(f, 0),
+                                                     m.versiones.get(f, 0)])
 
         if fid == 0x0005:                                   # nombre
             if func == 0x00:
-                return bytes([len(NOMBRE)])
+                return bytes([len(m.nombre)])
             if func == 0x01:
-                trozo = NOMBRE.encode()[params[0]:params[0] + 16]
-                return trozo.ljust(16, b"\x00")
+                return m.nombre.encode()[params[0]:params[0] + 16].ljust(16, b"\x00")
 
         if fid == 0x1004 and func == 0x01:                  # batería
-            return bytes(BATERIA)
+            if m.bateria is None:
+                raise KeyError((fid, func))
+            return bytes(m.bateria)
+
+        if fid == 0x2201:                                   # DPI clásico
+            if func == 0x00:                                # getSensorCount
+                return b"\x01"
+            if func == 0x01:                                # getSensorDpiList
+                return m.dpi_lista
+            if func == 0x02:                                # getSensorDpi
+                return (bytes([0x00]) + self.dpi.to_bytes(2, "big")
+                        + m.dpi_defecto.to_bytes(2, "big"))
+            if func == 0x03:                                # setSensorDpi
+                self.dpi = int.from_bytes(params[1:3], "big")
+                return bytes([0x00]) + self.dpi.to_bytes(2, "big")
 
         if fid == 0x2202:                                   # DPI extendido
             # Números de función según Solaar: 5 = leer, 6 = escribir.
@@ -173,51 +127,59 @@ class CanalSimulado:
                 return bytes([0x00, 0x05, 0x0f, 0x00])
             if func == 0x02:                                # getSensorDpiRanges
                 pagina = params[2]
-                cuerpo = (RANGOS_PAGINAS[pagina] if pagina < len(RANGOS_PAGINAS)
-                          else b"\x00" * 13)
+                cuerpo = (m.rangos_paginas[pagina]
+                          if pagina < len(m.rangos_paginas) else b"\x00" * 13)
                 return bytes([params[0], params[1], pagina]) + cuerpo
             if func == 0x03:                                # getSensorDpiList
                 # Los cinco DPI que guarda el perfil onboard.
                 payload = bytes([0x00, 0x00])
-                for v in DPI_NIVELES:
+                for v in m.dpi_niveles:
                     payload += v.to_bytes(2, "big")
                 return payload
             if func == 0x04:                                # getSensorLodList
-                # Distancia de despegue de cada uno de los cinco niveles.
-                return bytes([0x00]) + bytes([self.lod] * len(DPI_NIVELES))
+                return bytes([0x00]) + bytes([self.lod] * len(m.dpi_niveles))
             if func == 0x05:                                # getSensorDpi
                 return (bytes([0x00])
                         + self.dpi.to_bytes(2, "big")
-                        + DPI_DEFECTO.to_bytes(2, "big")
+                        + m.dpi_defecto.to_bytes(2, "big")
                         + self.dpi.to_bytes(2, "big")
-                        + DPI_DEFECTO.to_bytes(2, "big")
+                        + m.dpi_defecto.to_bytes(2, "big")
                         + bytes([self.lod]))
             if func == 0x06:                                # setSensorDpi
                 # params: [sensor, dpiX(2), dpiY(2), lod(1)]
                 self.dpi = int.from_bytes(params[1:3], "big")
                 if len(params) > 5:
                     self.lod = params[5]
-                # El ratón devuelve el eco de lo que se le pidió.
                 return (bytes([0x00]) + self.dpi.to_bytes(2, "big")
                         + self.dpi.to_bytes(2, "big") + bytes([self.lod]))
 
-        if fid == 0x8061:                                   # tasa de reporte
-            # Volcado real: por receptor sólo hasta 1000 Hz (0x0f),
-            # por cable hasta 8000 Hz (0x7f).
-            if func == 0x00:                                # capacidades por conexión
-                return b"\x00\x0F" if params[0] == 0 else b"\x00\x7F"
+        if fid == 0x8060:                                   # tasa clásica
+            if func == 0x00:                                # getReportRateList
+                return bytes([m.ms_bitmap])
+            if func == 0x01:                                # getReportRate
+                return bytes([self.ms])
+            if func == 0x02:                                # setReportRate
+                self.ms = params[0]
+                return b"\x00"
+
+        if fid == 0x8061:                                   # tasa extendida
+            # Volcado real: por cable sólo hasta 1000 Hz, por receptor hasta
+            # 8000. La vía va en el parámetro de f0, y al revés de lo que
+            # parece: 0 es cable, 1 inalámbrico.
+            if func == 0x00:                                # capacidades por vía
+                return b"\x00" + bytes([m.hz_cable if params[0] == 0
+                                        else m.hz_receptor])
             if func == 0x01:                                # lista global
-                return b"\x00\x7F"
+                return b"\x00" + bytes([m.hz_global])
             if func == 0x02:                                # tasa actual
                 # MIENTE, igual que el hardware: devuelve el índice con el que
                 # arrancó aunque el enlace ya vaya a otra cosa. Es lo que hizo
                 # que diéramos por fallido el cambio durante toda una sesión.
-                return bytes([HZ_INDICE])
+                return bytes([m.hz_indice])
             if func == 0x03:                                # fijar tasa
                 # Comportamiento real del PRO X 2: por receptor sólo entra si
                 # antes se han desbloqueado las features ocultas (0x1E00).
-                # Sin eso contesta "sin error" y no cambia nada, que es lo que
-                # despistó durante toda una sesión.
+                # Sin eso contesta "sin error" y no cambia nada.
                 if self.ocultas:
                     self.hz_idx = params[0]
                 return b"\x00"
@@ -227,23 +189,21 @@ class CanalSimulado:
                 # entidades, unitId(4), transporte(2), modelId(6), ext
                 return bytes([2, 0xA1, 0xB2, 0xC3, 0xD4, 0x00, 0x07]) + b"\x00" * 7
             if func == 0x01:
-                entidad = params[0]
-                if entidad == 0:                            # firmware principal
+                if params[0] == 0:                          # firmware principal
                     return bytes([0]) + b"MPM" + bytes([0x25, 0x01]) + (0x0043).to_bytes(2, "big")
                 return bytes([1]) + b"BOT" + bytes([0x11, 0x00]) + (0x0009).to_bytes(2, "big")
 
         if fid == 0x1B04:                                   # botones
             if func == 0x00:
-                return bytes([len(BOTONES)])
+                return bytes([len(m.botones)])
             if func == 0x01:
-                cid, tid, flags, pos, grupo, gmask = BOTONES[params[0]]
+                cid, tid, flags, pos, grupo, gmask = m.botones[params[0]]
                 return (cid.to_bytes(2, "big") + tid.to_bytes(2, "big")
                         + bytes([flags, pos, grupo, gmask, 0]))
             if func == 0x02:
                 cid = int.from_bytes(params[0:2], "big")
-                destino = self.remapeos.get(cid, 0)
                 return (cid.to_bytes(2, "big") + b"\x00"
-                        + destino.to_bytes(2, "big"))
+                        + self.remapeos.get(cid, 0).to_bytes(2, "big"))
             if func == 0x03:
                 cid = int.from_bytes(params[0:2], "big")
                 destino = int.from_bytes(params[3:5], "big")
@@ -252,6 +212,14 @@ class CanalSimulado:
                 else:
                     self.remapeos.pop(cid, None)
                 return params[0:5]
+
+        if fid == 0x8071:                                   # efectos RGB
+            # Aún sin decodificar. Lo único medido es que el G203 contesta
+            # dieciséis ceros cuando se le pregunta con los parámetros a cero.
+            # Se reproduce tal cual; lo que daría con 0xFF no se inventa.
+            if func == 0x00 and not any(params):
+                return bytes(16)
+            raise KeyError((fid, func))
 
         if fid == 0x8090 and func == 0x00:                  # modo
             return b"\x00\x00"                              # arranca en onboard
@@ -265,8 +233,7 @@ class CanalSimulado:
 
         if fid == 0x8100:                                   # perfiles onboard
             if func == 0x00:                                # getOnboardProfilesInfo
-                return bytes([0x01, 0x07, 0x01, 0x05, 0x01, 0x05, 0x10, 0x00,
-                              0xff, 0x0a, 0x04, 0x00])      # volcado del PRO X 2
+                return m.info_onboard
             if func == 0x01:                                # setOnboardMode
                 self.modo_onboard = params[0]
                 return b"\x00"
@@ -278,9 +245,9 @@ class CanalSimulado:
                 sector = int.from_bytes(params[0:2], "big")
                 desp = int.from_bytes(params[2:4], "big")
                 if sector == 0:
-                    origen = DIRECTORIO.ljust(255, b"\x00")
+                    origen = m.directorio.ljust(255, b"\x00")
                 else:
-                    origen = self.sectores.get(sector, SECTOR_PERFIL)
+                    origen = self.sectores.get(sector, m.sector_perfil)
                 return origen[desp:desp + 16].ljust(16, b"\x00")
             if func == 0x06:                                # abrir escritura
                 self._escribiendo = (int.from_bytes(params[0:2], "big"), b"")
@@ -293,18 +260,27 @@ class CanalSimulado:
                 sector, buf = self._escribiendo
                 # El ratón comprueba el CRC: un sector mal cerrado se rechaza.
                 from .onboard import crc16_ccitt
+                self._escribiendo = (0, b"")
                 if len(buf) >= 2 and crc16_ccitt(buf[:-2]) == int.from_bytes(buf[-2:], "big"):
                     self.sectores[sector] = bytes(buf)
-                    self._escribiendo = (0, b"")
                     return b"\x00"
-                self._escribiendo = (0, b"")
                 raise KeyError((fid, func))     # error: CRC incorrecto
 
         raise KeyError((fid, func))
 
 
-def raton_simulado() -> Mouse:
-    node = HidrawNode(path="/dev/hidraw-simulado", vid=0x046D, pid=0xC54D,
-                      name="Logitech Lightspeed Receiver", hidpp=True,
-                      usage_page=0xFF00, report_ids=[0x10, 0x11])
-    return Mouse(node, CanalSimulado(), 0x01, (4, 2))
+def raton_simulado(modelo: Modelo = SL2) -> Mouse:
+    """Un `Mouse` conectado a un canal simulado. Por defecto, el PRO X 2."""
+    node = HidrawNode(path="/dev/hidraw-simulado",
+                      vid=modelo.vid, pid=modelo.pid, name=modelo.nodo,
+                      hidpp=True, usage_page=0xFF00, report_ids=[0x10, 0x11])
+    raton = Mouse(node, CanalSimulado(modelo), modelo.indice, (4, 2))
+
+    # Un ratón simulado es siempre modo demo, y se marca aquí y no en quien lo
+    # pide: el simulado comparte identificador con el real —mismo vid:pid— y la
+    # tasa se recuerda en disco por identificador, así que sin esto las pruebas
+    # leían y escribían la tasa del ratón de verdad. Salía un fallo suelto y
+    # difícil de reproducir, según lo que hubiera guardado el demonio.
+    if raton.rate is not None and hasattr(raton.rate, "demo"):
+        raton.rate.demo = True
+    return raton

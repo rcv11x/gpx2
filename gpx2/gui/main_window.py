@@ -584,7 +584,7 @@ class PaginaRaton(QWidget):
 
         try:
             crudo = cap.leer_sector(1)
-            perfil = ob_mod.leer_perfil(crudo, cap.num_botones)
+            perfil = ob_mod.leer_perfil(crudo, cap.num_botones, cap.formato)
         except Exception as e:
             cabecera.añadir(QLabel(f"No se pudo leer: {e}"))
             return _columna(cabecera)
@@ -850,7 +850,8 @@ class PaginaRaton(QWidget):
                     1, ob_mod.escribir_perfil(perfil))
             self._sector_ob = self.raton.onboard.leer_sector(1)
             self._perfil_ob = ob_mod.leer_perfil(self._sector_ob,
-                                                 self.raton.onboard.num_botones)
+                                                 self.raton.onboard.num_botones,
+                                                 self.raton.onboard.formato)
             _avisar(self, f"{que.capitalize()} guardados en el ratón")
         except Exception as e:
             QMessageBox.warning(self, f"No se pudo guardar {que}", str(e))

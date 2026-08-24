@@ -1,13 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Perfiles guardados en la memoria del ratón (feature 0x8100, formato 0x07).
+Perfiles guardados en la memoria del ratón (feature 0x8100).
 
 Lo que se escribe aquí **sobrevive a apagar el ratón** y funciona sin software
 en cualquier ordenador. Es lo que hace el programa de Logitech en Windows.
 
-El formato 0x07 está decodificado en `PROTOCOLO.md` a partir de volcados de un
-PRO X 2; Solaar sólo maneja el 0x06, así que esta disposición no está publicada
-en ningún otro sitio.
+Hay dos disposiciones y no son intercambiables. Hasta el formato 0x06, la tasa
+va en milisegundos y cada nivel de DPI es un u16 de un solo eje. El 0x07 la
+cambió por un índice de la tabla de 0x8061 y le dio a cada nivel sus dos ejes y
+su distancia de despegue. Leer uno con el molde del otro no da error: da
+números, y encima verosímiles. El bloque de botones sí es igual en ambas.
+
+El 0x07 está decodificado en `PROTOCOLO.md` a partir de volcados de un PRO X 2;
+Solaar sólo maneja el 0x06, así que esa disposición no está publicada en ningún
+otro sitio.
 
 Regla que sigue todo este módulo: **al escribir se parte del sector que el
 ratón ya tenía y sólo se cambian los campos que entendemos**. Del sector hay
@@ -21,13 +27,20 @@ from dataclasses import dataclass, field
 # Índice -> Hz, la misma tabla que usa la feature 0x8061.
 MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
 
-# Disposición del sector. Ver PROTOCOLO.md.
+# Disposición del sector en el formato 0x07. Ver PROTOCOLO.md.
 OFF_TASA = 0
 OFF_TASA_2 = 1
 OFF_NIVEL_DEFECTO = 2
 OFF_NIVELES = 4
 BYTES_POR_NIVEL = 5          # dpiX(2 LE), dpiY(2 LE), distancia de despegue(1)
 NUM_NIVELES = 5
+
+# Y en las anteriores: tasa en ms, nivel por defecto, nivel del botón de DPI,
+# y cinco niveles de un solo eje.
+CLASICO_OFF_NIVEL_DEFECTO = 1
+CLASICO_OFF_NIVELES = 3
+CLASICO_BYTES_POR_NIVEL = 2
+FORMATO_NUEVO = 0x07         # a partir de aquí, la disposición del PRO X 2
 
 
 def crc16_ccitt(datos: bytes) -> int:
@@ -68,6 +81,13 @@ class PerfilOnboard:
     # así los campos que no entendemos viajan intactos.
     crudo: bytes = b""
     inicio_botones: int | None = None
+    # Hace falta al escribir: decide dónde va cada campo. Por omisión, el del
+    # PRO X 2, que es con el que se escribió este módulo.
+    formato: int = FORMATO_NUEVO
+
+    @property
+    def clasico(self) -> bool:
+        return self.formato < FORMATO_NUEVO
 
     @property
     def dpi_por_defecto(self) -> int:
@@ -80,19 +100,40 @@ def _indice_tasa(hz: int) -> int:
     return MAPEO_HZ.index(hz)
 
 
-def leer_perfil(crudo: bytes, num_botones: int) -> PerfilOnboard:
-    """Decodifica un sector de perfil."""
+def leer_perfil(crudo: bytes, num_botones: int,
+                formato: int = FORMATO_NUEVO) -> PerfilOnboard:
+    """Decodifica un sector de perfil, según la disposición de su formato."""
+    clasico = formato < FORMATO_NUEVO
     niveles = []
-    for i in range(NUM_NIVELES):
-        o = OFF_NIVELES + i * BYTES_POR_NIVEL
-        if o + BYTES_POR_NIVEL > len(crudo):
-            break
-        niveles.append(Nivel(
-            x=int.from_bytes(crudo[o:o + 2], "little"),
-            y=int.from_bytes(crudo[o + 2:o + 4], "little"),
-            despegue=crudo[o + 4]))
 
-    idx = crudo[OFF_TASA]
+    if clasico:
+        # Un solo eje y sin distancia de despegue: se rellenan con el propio
+        # DPI y con cero, para que el resto del programa no tenga que saber de
+        # qué formato viene el perfil.
+        for i in range(NUM_NIVELES):
+            o = CLASICO_OFF_NIVELES + i * CLASICO_BYTES_POR_NIVEL
+            if o + CLASICO_BYTES_POR_NIVEL > len(crudo):
+                break
+            dpi = int.from_bytes(crudo[o:o + 2], "little")
+            if dpi in (0, 0xFFFF):      # nivel sin usar
+                continue
+            niveles.append(Nivel(x=dpi, y=dpi, despegue=0))
+        ms = crudo[0]
+        tasa_hz = 1000 // ms if ms else 0
+        nivel_defecto = crudo[CLASICO_OFF_NIVEL_DEFECTO]
+    else:
+        for i in range(NUM_NIVELES):
+            o = OFF_NIVELES + i * BYTES_POR_NIVEL
+            if o + BYTES_POR_NIVEL > len(crudo):
+                break
+            niveles.append(Nivel(
+                x=int.from_bytes(crudo[o:o + 2], "little"),
+                y=int.from_bytes(crudo[o + 2:o + 4], "little"),
+                despegue=crudo[o + 4]))
+        idx = crudo[OFF_TASA]
+        tasa_hz = MAPEO_HZ[idx] if idx < len(MAPEO_HZ) else 0
+        nivel_defecto = crudo[OFF_NIVEL_DEFECTO]
+
     inicio = buscar_botones(crudo, num_botones)
     botones = []
     if inicio is not None:
@@ -100,10 +141,9 @@ def leer_perfil(crudo: bytes, num_botones: int) -> PerfilOnboard:
                    for i in range(num_botones)]
 
     return PerfilOnboard(
-        tasa_hz=MAPEO_HZ[idx] if idx < len(MAPEO_HZ) else 0,
-        nivel_por_defecto=crudo[OFF_NIVEL_DEFECTO],
+        tasa_hz=tasa_hz, nivel_por_defecto=nivel_defecto,
         niveles=niveles, botones=botones,
-        crudo=crudo, inicio_botones=inicio)
+        crudo=crudo, inicio_botones=inicio, formato=formato)
 
 
 def escribir_perfil(perfil: PerfilOnboard) -> bytes:
@@ -117,13 +157,21 @@ def escribir_perfil(perfil: PerfilOnboard) -> bytes:
     tam = len(perfil.crudo)
     cuerpo = bytearray(perfil.crudo[:tam - 2])
 
-    cuerpo[OFF_TASA] = _indice_tasa(perfil.tasa_hz)
-    cuerpo[OFF_NIVEL_DEFECTO] = perfil.nivel_por_defecto
-    for i, nivel in enumerate(perfil.niveles[:NUM_NIVELES]):
-        o = OFF_NIVELES + i * BYTES_POR_NIVEL
-        cuerpo[o:o + 2] = nivel.x.to_bytes(2, "little")
-        cuerpo[o + 2:o + 4] = nivel.y.to_bytes(2, "little")
-        cuerpo[o + 4] = nivel.despegue
+    if perfil.clasico:
+        if perfil.tasa_hz:
+            cuerpo[0] = max(1, round(1000 / perfil.tasa_hz))
+        cuerpo[CLASICO_OFF_NIVEL_DEFECTO] = perfil.nivel_por_defecto
+        for i, nivel in enumerate(perfil.niveles[:NUM_NIVELES]):
+            o = CLASICO_OFF_NIVELES + i * CLASICO_BYTES_POR_NIVEL
+            cuerpo[o:o + 2] = nivel.x.to_bytes(2, "little")
+    else:
+        cuerpo[OFF_TASA] = _indice_tasa(perfil.tasa_hz)
+        cuerpo[OFF_NIVEL_DEFECTO] = perfil.nivel_por_defecto
+        for i, nivel in enumerate(perfil.niveles[:NUM_NIVELES]):
+            o = OFF_NIVELES + i * BYTES_POR_NIVEL
+            cuerpo[o:o + 2] = nivel.x.to_bytes(2, "little")
+            cuerpo[o + 2:o + 4] = nivel.y.to_bytes(2, "little")
+            cuerpo[o + 4] = nivel.despegue
 
     if perfil.inicio_botones is not None:
         for i, b in enumerate(perfil.botones):

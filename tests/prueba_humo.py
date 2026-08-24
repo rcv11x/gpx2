@@ -150,7 +150,7 @@ def main() -> int:
                          motor.aplicar(almacen.obtener("escritorio"))),
                   "no reintenta lo que el ratón no admite")
 
-    print("6. Perfiles en la memoria del ratón (0x8100, formato 0x07)")
+    print("6. Perfiles en la memoria del ratón (0x8100)")
     from gpx2.onboard import (ACCIONES, crc16_ccitt, describir_boton,
                               escribir_perfil, leer_perfil)
     # Vector canónico del CRC-16/CCITT-FALSE. Si esto falla, cualquier sector
@@ -166,7 +166,7 @@ def main() -> int:
     comprobar(crc16_ccitt(crudo[:-2]) == int.from_bytes(crudo[-2:], "big"),
               "y su CRC cuadra")
 
-    perfil = leer_perfil(crudo, ob.num_botones)
+    perfil = leer_perfil(crudo, ob.num_botones, ob.formato)
     comprobar(perfil.tasa_hz == 1000, "decodifica la tasa guardada")
     comprobar([n.x for n in perfil.niveles] == [800, 1200, 1600, 2400, 3200],
               "decodifica los cinco niveles de DPI")
@@ -178,12 +178,44 @@ def main() -> int:
     perfil.botones[3] = ACCIONES["Clic central"]
     perfil.niveles[1].x = perfil.niveles[1].y = 1500
     ob.escribir_sector(1, escribir_perfil(perfil))
-    releido = leer_perfil(ob.leer_sector(1), ob.num_botones)
+    releido = leer_perfil(ob.leer_sector(1), ob.num_botones, ob.formato)
     comprobar(describir_boton(releido.botones[3]) == "Clic central",
               "escribe un botón en la memoria del ratón")
     comprobar(releido.niveles[1].x == 1500, "y un nivel de DPI")
 
-    print("7. El modo lo elige el usuario, no el demonio")
+    print("7. Otro ratón: G203 LIGHTSYNC, con las features clásicas")
+    # El contrapunto al PRO X 2: por cable, sin batería, con 0x2201 y 0x8060 en
+    # vez de 0x2202 y 0x8061, y con el perfil en formato 0x04. Sale del primer
+    # informe que mandó alguien de fuera. Sin esto, todo el camino "clásico"
+    # sería código que no ejecuta nadie hasta que le falla a un usuario.
+    from gpx2.modelos import G203
+    g = raton_simulado(G203)
+    eg = g.leer_todo()
+    comprobar(eg["nombre"] == "G203 LIGHTSYNC", "lo identifica por su nombre")
+    comprobar(not eg["errores"], "se construye sin errores")
+    comprobar(type(g.dpi).__name__ == "AdjustableDpi", "elige el DPI clásico (0x2201)")
+    comprobar(type(g.rate).__name__ == "ReportRate", "elige la tasa clásica (0x8060)")
+    comprobar(eg["rate"].actual_hz == 1000, "lee su tasa en milisegundos")
+    comprobar(eg["rate"].disponibles == [1000, 500, 250, 125], "y las que admite")
+    comprobar(eg["battery"] is None, "no le inventa batería: va por cable")
+    comprobar(g.buttons is None, "no expone 0x1B04, y no se finge que sí")
+
+    og = g.onboard
+    comprobar(og.formato == 0x04, "lee su formato de perfil, que no es el 0x07")
+    crudo_g = og.leer_sector(1)
+    comprobar(crc16_ccitt(crudo_g[:-2]) == int.from_bytes(crudo_g[-2:], "big"),
+              "el CRC de su sector cuadra igual")
+    pg = leer_perfil(crudo_g, og.num_botones, og.formato)
+    # Con el molde del 0x07 esto daba 8193 y 16387, que es lo que pasa cuando
+    # se decodifica por encima de los bytes: números, y encima verosímiles.
+    comprobar([n.x for n in pg.niveles] == [400, 800, 1600, 3200],
+              "decodifica sus DPI con la disposición clásica")
+    comprobar(pg.tasa_hz == 1000, "y su tasa, que ahí va en milisegundos")
+    comprobar(describir_boton(pg.botones[3]) == "Atrás",
+              "los botones se leen igual en las dos disposiciones")
+    comprobar(escribir_perfil(pg) == crudo_g, "ida y vuelta sin tocar nada")
+
+    print("8. El modo lo elige el usuario, no el demonio")
     # El estado del modo demo tiene que estar aparte del real: si compartieran
     # fichero, ejecutar estas pruebas cambiaría la configuración del ratón de
     # quien las lanza.
@@ -209,7 +241,7 @@ def main() -> int:
         comprobar(d.raton.onboard.es_host() == esperado,
                   f"si eliges {preferido}, el ratón se queda ahí")
 
-    print("8. Robustez")
+    print("9. Robustez")
     from gpx2.features import Firmware
     fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)
     # Sin el espacio se lee "BL171.00", como si la versión fuera la 171.
@@ -218,7 +250,7 @@ def main() -> int:
     from gpx2.transport import enumerate_nodes
     comprobar(isinstance(enumerate_nodes(), list), "la enumeración no lanza")
 
-    print("9. Botones reprogramables (0x1B04)")
+    print("10. Botones reprogramables (0x1B04)")
     botones = raton.buttons
     comprobar(botones is not None, "el ratón declara la feature de botones")
     controles = botones.controls()

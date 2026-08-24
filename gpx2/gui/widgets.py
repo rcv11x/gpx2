@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath,
-                           QPalette, QPen)
+from PySide6.QtGui import (QColor, QFont, QIcon, QPainter,
+                           QPainterPath, QPalette, QPen)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                                QSizePolicy, QSlider, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
@@ -446,6 +446,21 @@ class DiagramaRaton(QWidget):
         i = self._cerca_de(evento.position())
         if i is not None:
             self.pulsado.emit(i)
+
+
+def icono(*nombres: str) -> QIcon:
+    """El primer icono del tema que exista, o ninguno.
+
+    Los nombres son los estándar de freedesktop, así que en Plasma salen los
+    de Breeze y en otro escritorio los suyos. Se prueban varios porque no
+    todos los temas traen los mismos, y si no hay ninguno se devuelve un icono
+    vacío: un botón sin icono se ve bien, uno con un hueco no.
+    """
+    for nombre in nombres:
+        ico = QIcon.fromTheme(nombre)
+        if not ico.isNull():
+            return ico
+    return QIcon()
 
 
 def pastilla(texto: str) -> QLabel:

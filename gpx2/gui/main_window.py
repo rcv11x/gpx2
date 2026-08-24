@@ -26,6 +26,7 @@ from ..engine import Motor
 from ..profiles import Almacen, Perfil
 from .widgets import (ColumnaCentrada, DelegadoDispositivo,
                       DiagramaRaton, FilaSlider, FilaSliderLista,
+                      icono,
                       ROL_ENCABEZADO, ROL_SUB, Tarjeta, hoja_de_estilo,
                       pastilla)
 
@@ -181,13 +182,24 @@ class PaginaRaton(QWidget):
         lay.addWidget(self._cabecera())
 
         pestañas = QTabWidget()
-        pestañas.addTab(_envolver(self._tab_sensibilidad()), "Ajustes")
-        pestañas.addTab(_envolver(self._tab_botones()), "Botones")
+        pestañas.addTab(_envolver(self._tab_sensibilidad()),
+                        icono("input-mouse", "preferences-desktop-mouse"),
+                        "Ajustes")
+        pestañas.addTab(_envolver(self._tab_botones()),
+                        icono("configure", "preferences-desktop-keyboard"),
+                        "Botones")
         if self.raton.onboard is not None:
-            pestañas.addTab(_envolver(self._tab_memoria()), "Memoria del ratón")
-        pestañas.addTab(_envolver(self._tab_perfiles()), "Perfiles")
-        pestañas.addTab(_envolver(self._tab_firmware()), "Firmware")
-        pestañas.addTab(_envolver(self._tab_diagnostico()), "Diagnóstico")
+            pestañas.addTab(_envolver(self._tab_memoria()),
+                            icono("media-flash", "drive-harddisk"),
+                            "Memoria del ratón")
+        pestañas.addTab(_envolver(self._tab_perfiles()),
+                        icono("bookmarks", "user-identity"), "Perfiles")
+        pestañas.addTab(_envolver(self._tab_firmware()),
+                        icono("system-upgrade", "application-x-firmware"),
+                        "Firmware")
+        pestañas.addTab(_envolver(self._tab_diagnostico()),
+                        icono("tools-report-bug", "utilities-terminal"),
+                        "Diagnóstico")
         lay.addWidget(pestañas, 1)
 
     # -- cabecera -------------------------------------------------------------
@@ -389,6 +401,7 @@ class PaginaRaton(QWidget):
         self.lbl_desfase.setWordWrap(True)
         t.añadir(self.lbl_desfase)
         self.btn_guardar_perfil = QPushButton()
+        self.btn_guardar_perfil.setIcon(icono("document-save"))
         self.btn_guardar_perfil.clicked.connect(self._guardar_en_perfil)
         t.añadir(_suelto(self.btn_guardar_perfil))
         self._refrescar_desfase()
@@ -546,6 +559,7 @@ class PaginaRaton(QWidget):
         self.lbl_modo_aviso.setWordWrap(True)
         t_modo.añadir(self.lbl_modo_aviso)
         btn_modo = QPushButton()
+        btn_modo.setIcon(icono("exchange-positions", "system-switch-user"))
         self._pintar_boton_modo(btn_modo)
         btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
         t_modo.añadir(_suelto(btn_modo))
@@ -594,7 +608,8 @@ class PaginaRaton(QWidget):
         lay_def.addWidget(self._combo_defecto, 1)
         t_niv.añadir(fila_def)
 
-        btn_niv = QPushButton("Guardar los niveles en el ratón")
+        btn_niv = QPushButton(icono("document-save"),
+                              "Guardar los niveles en el ratón")
         btn_niv.clicked.connect(self._guardar_niveles)
         t_niv.añadir(_suelto(btn_niv))
 
@@ -631,7 +646,8 @@ class PaginaRaton(QWidget):
             self._combos_boton.append(combo)
         self._refrescar_diagrama()
 
-        btn_bot = QPushButton("Guardar los botones en el ratón")
+        btn_bot = QPushButton(icono("document-save"),
+                              "Guardar los botones en el ratón")
         btn_bot.clicked.connect(self._guardar_botones)
         t_bot.añadir(_suelto(btn_bot))
 
@@ -656,7 +672,7 @@ class PaginaRaton(QWidget):
         aviso.setObjectName("Suave")
         aviso.setWordWrap(True)
         t_guardar.añadir(aviso)
-        btn_guardar = QPushButton("Guardar en el ratón")
+        btn_guardar = QPushButton(icono("document-save"), "Guardar en el ratón")
         btn_guardar.clicked.connect(self._guardar_ajustes_ob)
         t_guardar.añadir(_suelto(btn_guardar))
 
@@ -1262,16 +1278,21 @@ class PanelPerfiles(QWidget):
         tarjeta.añadir(self.lista)
 
         botones = QHBoxLayout()
-        for texto, accion in (("Aplicar", self._aplicar),
-                              ("Crear desde el estado actual", self._crear),
-                              ("Juegos…", self._editar_juegos),
-                              ("Por defecto", self._por_defecto),
-                              ("Borrar", self._borrar)):
-            b = QPushButton(texto)
+        for texto, nombres, accion in (
+                ("Aplicar", ("dialog-ok-apply", "dialog-ok"), self._aplicar),
+                ("Crear desde el estado actual", ("list-add", "document-new"),
+                 self._crear),
+                ("Juegos…", ("applications-games", "preferences-desktop-gaming"),
+                 self._editar_juegos),
+                ("Por defecto", ("emblem-favorite", "bookmarks"),
+                 self._por_defecto),
+                ("Borrar", ("edit-delete", "list-remove"), self._borrar)):
+            b = QPushButton(icono(*nombres), texto)
             b.clicked.connect(accion)
             botones.addWidget(b)
         botones.addStretch(1)
-        abrir = QPushButton("Abrir carpeta")
+        abrir = QPushButton(icono("folder-open", "document-open-folder"),
+                            "Abrir carpeta")
         abrir.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.almacen.dir))))
         botones.addWidget(abrir)
@@ -1468,7 +1489,7 @@ class VentanaPrincipal(QMainWindow):
         lat.addWidget(self.lista)
         lat.addStretch(1)
 
-        self.btn_rescan = QPushButton("Volver a escanear")
+        self.btn_rescan = QPushButton(icono("view-refresh"), "Volver a escanear")
         self.btn_rescan.clicked.connect(self.escanear)
         lat.addWidget(self.btn_rescan)
 

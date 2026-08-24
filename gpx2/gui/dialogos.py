@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
 
 from ..procesos import (caratula, juegos_instalados,
                         listar_candidatos, nombres_de_steam)
+from .widgets import icono
 
 ROL_VALOR = Qt.ItemDataRole.UserRole
 
@@ -58,7 +59,8 @@ class DialogoJuegos(QDialog):
             self._añadir_activador(self._nombre_steam(a), ("steam", a))
         raiz.addWidget(self.lista_activadores)
 
-        quitar = QPushButton("Quitar el seleccionado")
+        quitar = QPushButton(icono("list-remove", "edit-delete"),
+                             "Quitar el seleccionado")
         quitar.clicked.connect(self._quitar)
         raiz.addLayout(_a_la_derecha(quitar))
 
@@ -72,7 +74,7 @@ class DialogoJuegos(QDialog):
         self.busqueda.setPlaceholderText("Buscar…")
         self.busqueda.textChanged.connect(self._filtrar)
         lay_busq.addWidget(self.busqueda, 1)
-        refrescar = QPushButton("Actualizar")
+        refrescar = QPushButton(icono("view-refresh"), "Actualizar")
         refrescar.clicked.connect(self._cargar)
         lay_busq.addWidget(refrescar)
         raiz.addWidget(fila_busq)
@@ -85,7 +87,7 @@ class DialogoJuegos(QDialog):
         self.lista_procesos.itemDoubleClicked.connect(lambda _: self._añadir())
         raiz.addWidget(self.lista_procesos, 1)
 
-        añadir = QPushButton("Añadir el seleccionado")
+        añadir = QPushButton(icono("list-add"), "Añadir el seleccionado")
         añadir.clicked.connect(self._añadir)
         raiz.addLayout(_a_la_derecha(añadir))
 
@@ -98,7 +100,7 @@ class DialogoJuegos(QDialog):
             "…o escríbelo a mano: nombre del ejecutable, o «steam:730»")
         self.manual.returnPressed.connect(self._añadir_manual)
         lay_man.addWidget(self.manual, 1)
-        btn_man = QPushButton("Añadir")
+        btn_man = QPushButton(icono("list-add"), "Añadir")
         btn_man.clicked.connect(self._añadir_manual)
         lay_man.addWidget(btn_man)
         raiz.addWidget(fila_man)

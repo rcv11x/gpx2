@@ -31,6 +31,33 @@ def directorio_perfiles(demo: bool = False) -> Path:
     return Path(base) / "gpx2" / ("profiles-demo" if demo else "profiles")
 
 
+def ruta_modo(demo: bool = False) -> Path:
+    return directorio_perfiles(demo).parent / "modo"
+
+
+def leer_modo_preferido(demo: bool = False) -> str | None:
+    """Qué modo ha elegido el usuario: "host", "onboard", o nada aún.
+
+    Hace falta porque el demonio no puede distinguir "el ratón se ha reiniciado
+    y ha vuelto a onboard" de "el usuario ha pedido onboard a propósito". Sin
+    esto, le deshacía la elección cada cinco segundos.
+
+    Un fichero de una línea y no un TOML: es un solo dato y así se puede mirar
+    y cambiar con `cat` y `echo`.
+    """
+    try:
+        valor = ruta_modo(demo).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return valor if valor in ("host", "onboard") else None
+
+
+def guardar_modo_preferido(modo: str, demo: bool = False) -> None:
+    ruta = ruta_modo(demo)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(modo + "\n", encoding="utf-8")
+
+
 @dataclass
 class Ajustes:
     """Lo que un perfil cambia. None = 'no lo toques'."""

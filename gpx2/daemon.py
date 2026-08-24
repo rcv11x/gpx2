@@ -25,7 +25,7 @@ import sys
 
 from .device import discover
 from .engine import Motor
-from .profiles import Almacen, Perfil
+from .profiles import Almacen, Perfil, leer_modo_preferido
 from .watcher.gamemode import VigilanteGameMode
 from .watcher.procfs import VigilanteProcfs
 
@@ -45,6 +45,7 @@ class Demonio:
         self._bus = None
         self._id_aviso = 0
         self._dpi_visto: int | None = None
+        self._aviso_onboard = False
         self.jugando: dict[int, str] = {}      # pid -> id de perfil aplicado
         self._pids: set[int] = set()           # visto por CUALQUIER vigilante
         self.servicio = None                   # interfaz D-Bus, para las señales
@@ -107,6 +108,13 @@ class Demonio:
     def aplicar(self, perfil: Perfil, motivo: str = "") -> list[str]:
         if self.motor is None:
             return ["no hay ningún ratón conectado"]
+        if self._prefiere_onboard():
+            if not self._aviso_onboard:
+                log.info("el ratón está en modo onboard porque lo has elegido: "
+                         "manda su memoria y los perfiles por juego no se aplican")
+                self._aviso_onboard = True
+            return ["el ratón está en modo onboard"]
+        self._aviso_onboard = False
         cambios = self.motor.aplicar(perfil)
         if cambios:
             log.info("perfil '%s'%s: %s", perfil.nombre,
@@ -122,6 +130,11 @@ class Demonio:
         # referencia en la siguiente vuelta.
         self._dpi_visto = None
         return [str(c) for c in cambios]
+
+    def _prefiere_onboard(self) -> bool:
+        """¿Ha pedido el usuario que mande el ratón? Se relee cada vez: la
+        interfaz puede cambiarlo mientras el demonio está en marcha."""
+        return leer_modo_preferido(self.demo) == "onboard"
 
     async def _mirar_dpi(self) -> None:
         """Avisa si el DPI ha cambiado sin que lo hayamos pedido nosotros.
@@ -149,6 +162,12 @@ class Demonio:
         activo = self.motor.perfil_activo
         perfil = self.almacen.obtener(activo) if activo else None
         if perfil is None:
+            return
+
+        # Si has elegido modo onboard, mandas tú: el ratón está así porque lo
+        # has pedido, no porque se haya reiniciado. Sin esta comprobación el
+        # demonio te devolvía a host cada cinco segundos.
+        if self._prefiere_onboard():
             return
 
         # Sólo se repone cuando el ratón ha vuelto a mandar él: ésa es la firma

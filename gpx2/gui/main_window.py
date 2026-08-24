@@ -406,10 +406,15 @@ class PaginaRaton(QWidget):
             "solos al arrancar un juego, pero nada de eso sobrevive a apagarlo.")
         self.lbl_modo = QLabel(self.estado.get("onboard") or "?")
         t_modo.añadir(self.lbl_modo)
+        self.lbl_modo_aviso = QLabel()
+        self.lbl_modo_aviso.setObjectName("Suave")
+        self.lbl_modo_aviso.setWordWrap(True)
+        t_modo.añadir(self.lbl_modo_aviso)
         btn_modo = QPushButton()
         self._pintar_boton_modo(btn_modo)
         btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
         t_modo.añadir(btn_modo)
+        self._pintar_aviso_modo()
 
         # -- niveles de sensibilidad -------------------------------------------
         t_niv = Tarjeta(
@@ -521,6 +526,20 @@ class PaginaRaton(QWidget):
         t_guardar.añadir(btn_guardar)
 
         return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
+
+    def _pintar_aviso_modo(self) -> None:
+        aviso = getattr(self, "lbl_modo_aviso", None)
+        if aviso is None:
+            return
+        try:
+            host = self.raton.onboard.es_host()
+        except Exception:
+            return
+        aviso.setText(
+            "Mientras esté así, los perfiles por juego no se aplican: el DPI lo "
+            "manda la memoria del ratón." if not host else
+            "Los perfiles por juego funcionan, pero lo que ajustes se pierde al "
+            "apagar el ratón.")
 
     def _refrescar_diagrama(self) -> None:
         """El esquema enseña lo que hay elegido ahora, no lo que está guardado."""
@@ -927,8 +946,13 @@ class PaginaRaton(QWidget):
                 return
 
     def _toggle_mode(self, btn: QPushButton) -> None:
+        from ..profiles import guardar_modo_preferido
         try:
             quiero_host = not self.raton.onboard.es_host()
+            # Se anota la elección ANTES de hacerla: el demonio comprueba cada
+            # pocos segundos si el ratón se ha reiniciado solo, y sin saber que
+            # esto lo has pedido tú, te lo desharía.
+            guardar_modo_preferido("host" if quiero_host else "onboard", self.demo)
             if not self.raton.onboard.set_host(quiero_host):
                 QMessageBox.warning(
                     self, "El ratón no aceptó el cambio",
@@ -936,6 +960,7 @@ class PaginaRaton(QWidget):
             self._pintar_boton_modo(btn)
             if hasattr(self, "lbl_modo"):
                 self.lbl_modo.setText(self.raton.onboard.get())
+            self._pintar_aviso_modo()
         except Exception as e:
             QMessageBox.warning(self, "No se pudo cambiar el modo", str(e))
 

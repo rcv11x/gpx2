@@ -19,7 +19,13 @@ inservible.
 from __future__ import annotations
 
 import argparse
+import os
+import select
+import statistics
+import struct
 import sys
+import time
+from glob import glob
 
 from gpx2.hidpp import (IDX_DIRECT, IDX_RECEIVER, Hidpp, HidppError,
                         NoResponse)
@@ -272,6 +278,117 @@ def bloque_escritura_dpi(s: Sonda, estado: dict, validos: list[int],
         print("\n     ✗ el ratón no cambió. Casi seguro que el perfil onboard "
               "lo está reimponiendo:\n"
               "       vuelve a lanzarlo con --escribir para pasar a modo host.")
+
+
+# ---------------------------------------------------------------------------
+# Medición real de la tasa de reporte
+# ---------------------------------------------------------------------------
+
+# struct input_event del kernel en 64 bits: timeval (2 x long) + type + code
+# + value. Son 24 bytes.
+FORMATO_EVENTO = "llHHi"
+TAM_EVENTO = struct.calcsize(FORMATO_EVENTO)
+EV_SYN, SYN_REPORT = 0x00, 0x00
+
+
+def punteros_del_sistema() -> list[tuple[str, str, str]]:
+    """Nodos /dev/input/event* que informan de movimiento relativo.
+
+    Un ratón declara ejes relativos; un teclado no. Así se descartan sin tener
+    que abrirlos.
+    """
+    salida = []
+    for ruta in sorted(glob("/sys/class/input/event*")):
+        try:
+            rel = open(f"{ruta}/device/capabilities/rel").read().strip()
+            if not rel or int(rel, 16) == 0:
+                continue
+            nombre = open(f"{ruta}/device/name").read().strip()
+            vid = open(f"{ruta}/device/id/vendor").read().strip()
+            pid = open(f"{ruta}/device/id/product").read().strip()
+        except (OSError, ValueError):
+            continue
+        salida.append((f"/dev/input/{os.path.basename(ruta)}", nombre,
+                       f"{vid}:{pid}"))
+    return salida
+
+
+def medir_tasa(dispositivo: str, segundos: float = 5.0) -> None:
+    """Cuenta los informes que llegan de verdad y calcula los Hz.
+
+    Es la única medida que no depende de lo que el ratón *diga*: los sellos de
+    tiempo los pone el kernel al recibir cada informe. Hace falta mover el
+    ratón, porque parado no manda nada.
+    """
+    print(f"\n  Midiendo en {dispositivo} durante {segundos:.0f} s.")
+    print("  *** MUEVE EL RATÓN EN CÍRCULOS, SIN PARAR, HASTA QUE TERMINE ***\n")
+
+    try:
+        fd = os.open(dispositivo, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError as e:
+        print(f"     no se pudo abrir: {e}")
+        return
+
+    sellos: list[float] = []
+    fin = time.monotonic() + segundos
+    try:
+        while time.monotonic() < fin:
+            resto = fin - time.monotonic()
+            if not select.select([fd], [], [], min(0.2, max(0.0, resto)))[0]:
+                continue
+            try:
+                datos = os.read(fd, TAM_EVENTO * 256)
+            except BlockingIOError:
+                continue
+            for i in range(0, len(datos) - TAM_EVENTO + 1, TAM_EVENTO):
+                seg, useg, tipo, codigo, _ = struct.unpack(
+                    FORMATO_EVENTO, datos[i:i + TAM_EVENTO])
+                # Un informe del ratón termina siempre en SYN_REPORT: contarlo
+                # a él y no los ejes evita multiplicar por dos o por tres.
+                if tipo == EV_SYN and codigo == SYN_REPORT:
+                    sellos.append(seg + useg / 1_000_000)
+    finally:
+        os.close(fd)
+
+    if len(sellos) < 20:
+        print(f"     sólo llegaron {len(sellos)} informes: ¿moviste el ratón?")
+        return
+
+    huecos = [b - a for a, b in zip(sellos, sellos[1:]) if b > a]
+    # Los huecos grandes son pausas al mover, no la tasa: se descartan.
+    activos = sorted(h for h in huecos if h < 0.05)
+    if not activos:
+        print("     no hubo movimiento seguido; repítelo moviendo sin parar")
+        return
+
+    mediana = statistics.median(activos)
+    rapido = activos[len(activos) // 20]        # percentil 5: lo más rápido
+    print(f"     informes contados: {len(sellos)}   ·   intervalos útiles: "
+          f"{len(activos)}")
+    print(f"     intervalo típico:  {mediana * 1000:.3f} ms  ->  "
+          f"{1 / mediana:>7.0f} Hz")
+    print(f"     el más corto (p5): {rapido * 1000:.3f} ms  ->  "
+          f"{1 / rapido:>7.0f} Hz")
+
+    conocidas = [125, 250, 500, 1000, 2000, 4000, 8000]
+    cerca = min(conocidas, key=lambda v: abs(v - 1 / mediana))
+    print(f"\n     → la tasa real es {cerca} Hz")
+
+
+def bloque_medir(segundos: float) -> None:
+    titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
+    punteros = punteros_del_sistema()
+    if not punteros:
+        print("  No se encontró ningún puntero en /dev/input.")
+        return
+    print("  Punteros del sistema:")
+    for i, (dev, nombre, ids) in enumerate(punteros):
+        print(f"    [{i}] {dev:20} {ids}  {nombre}")
+
+    # El del ratón Logitech, si lo hay; si no, el primero.
+    elegido = next((p for p in punteros if p[2].startswith("046d")), punteros[0])
+    print(f"\n  Elegido: {elegido[1]}  ({elegido[0]})")
+    medir_tasa(elegido[0], segundos)
 
 
 def bloque_perfiles_onboard(s: Sonda) -> None:
@@ -577,6 +694,9 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--medir", nargs="?", const=5.0, type=float,
+                    metavar="SEGUNDOS",
+                    help="mide la tasa de reporte real moviendo el ratón")
     ap.add_argument("--en-onboard", action="store_true",
                     help="prueba la escritura de la tasa con el ratón en modo "
                          "onboard, por si la tasa la manda su perfil interno")
@@ -586,6 +706,10 @@ def main() -> int:
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
+
+    if args.medir:
+        bloque_medir(args.medir)
+        return 0
 
     titulo("DISPOSITIVO")
     hallazgo = encontrar(args.nodo)

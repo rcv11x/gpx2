@@ -294,6 +294,18 @@ que sí la declaren, y la interfaz detecta su ausencia y lo dice.
 
 ---
 
+## Medir la tasa de verdad
+
+Lo que el ratón declara por HID++ y lo que hace pueden no coincidir —de hecho
+en este ratón no coinciden. `depurar.py --medir` no le pregunta nada: abre el
+`/dev/input/event*` del puntero y cronometra los informes que llegan al kernel,
+que es la única medida independiente. Hay que mover el ratón mientras mide,
+porque parado no manda nada, y los huecos de más de 50 ms se descartan por ser
+pausas y no la tasa.
+
+No necesita sudo si está puesta la regla udev: `uaccess` cubre también
+`/dev/input`.
+
 ## Cómo se verifica algo nuevo
 
 1. `sudo python3 depurar.py` — lee y decodifica, sin tocar nada.

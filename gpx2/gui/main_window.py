@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
                                QListWidgetItem,
                                QMainWindow, QMessageBox, QPlainTextEdit,
                                QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QStackedWidget, QTableWidget,
+                               QSpinBox, QSplitter, QStackedWidget,
+                               QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
 
@@ -410,6 +411,53 @@ class PaginaRaton(QWidget):
         btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
         t_modo.añadir(btn_modo)
 
+        # -- niveles de sensibilidad -------------------------------------------
+        t_niv = Tarjeta(
+            "Niveles de sensibilidad",
+            "Los cinco escalones que guarda el ratón. Son por los que va pasando "
+            "el botón de «Ciclar DPI», y el marcado como inicial es el que tiene "
+            "al encenderse.")
+        self._spins_nivel = []
+        try:
+            validos = self.raton.dpi.valores_validos() if self.raton.dpi else []
+        except Exception:
+            validos = []
+        minimo = min(validos) if validos else 100
+        maximo = max(validos) if validos else 32000
+        for i, nivel in enumerate(perfil.niveles):
+            fila = QWidget()
+            lay = QHBoxLayout(fila)
+            lay.setContentsMargins(0, 0, 0, 0)
+            etiqueta = QLabel(f"Nivel {i + 1}")
+            etiqueta.setMinimumWidth(90)
+            lay.addWidget(etiqueta)
+            spin = QSpinBox()
+            spin.setRange(minimo, maximo)
+            spin.setSingleStep(50)
+            spin.setSuffix(" DPI")
+            spin.setValue(nivel.x)
+            lay.addWidget(spin, 1)
+            t_niv.añadir(fila)
+            self._spins_nivel.append(spin)
+
+        fila_def = QWidget()
+        lay_def = QHBoxLayout(fila_def)
+        lay_def.setContentsMargins(0, 0, 0, 0)
+        et_def = QLabel("Al encender")
+        et_def.setMinimumWidth(90)
+        lay_def.addWidget(et_def)
+        self._combo_defecto = QComboBox()
+        for i in range(len(perfil.niveles)):
+            self._combo_defecto.addItem(f"Nivel {i + 1}", i)
+        if 0 <= perfil.nivel_por_defecto < len(perfil.niveles):
+            self._combo_defecto.setCurrentIndex(perfil.nivel_por_defecto)
+        lay_def.addWidget(self._combo_defecto, 1)
+        t_niv.añadir(fila_def)
+
+        btn_niv = QPushButton("Guardar los niveles en el ratón")
+        btn_niv.clicked.connect(self._guardar_niveles)
+        t_niv.añadir(btn_niv)
+
         # -- botones ----------------------------------------------------------
         t_bot = Tarjeta(
             "Botones",
@@ -472,7 +520,7 @@ class PaginaRaton(QWidget):
         btn_guardar.clicked.connect(self._guardar_ajustes_ob)
         t_guardar.añadir(btn_guardar)
 
-        return _columna(cabecera, t_modo, t_bot, t_guardar)
+        return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
 
     def _refrescar_diagrama(self) -> None:
         """El esquema enseña lo que hay elegido ahora, no lo que está guardado."""
@@ -515,6 +563,27 @@ class PaginaRaton(QWidget):
                "los botones del firmware, no los que acabas de guardar. Para "
                "probarlos, pulsa «Volver a modo onboard» aquí arriba."))
         return True
+
+    def _guardar_niveles(self) -> None:
+        perfil = self._perfil_ob
+        if perfil is None:
+            return
+        try:
+            validos = self.raton.dpi.valores_validos() if self.raton.dpi else []
+        except Exception:
+            validos = []
+        for i, spin in enumerate(self._spins_nivel):
+            if i >= len(perfil.niveles):
+                break
+            v = spin.value()
+            # El sensor sólo admite ciertos valores: se ajusta al más cercano
+            # antes de escribirlo, o el ratón guardaría algo que no puede usar.
+            if validos:
+                v = min(validos, key=lambda x: abs(x - v))
+                spin.setValue(v)
+            perfil.niveles[i].x = perfil.niveles[i].y = v
+        perfil.nivel_por_defecto = self._combo_defecto.currentIndex()
+        self._escribir_perfil_ob(perfil, "los niveles")
 
     def _guardar_botones(self) -> None:
         from .. import onboard as ob_mod

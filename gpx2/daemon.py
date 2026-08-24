@@ -42,6 +42,9 @@ class Demonio:
         self.raton = None
         self.motor: Motor | None = None
         self.almacen = Almacen(demo=demo)
+        self._bus = None
+        self._id_aviso = 0
+        self._dpi_visto: int | None = None
         self.jugando: dict[int, str] = {}      # pid -> id de perfil aplicado
         self._pids: set[int] = set()           # visto por CUALQUIER vigilante
         self.servicio = None                   # interfaz D-Bus, para las señales
@@ -82,6 +85,7 @@ class Demonio:
                     # saber si el ratón sigue ahí: hay que preguntárselo.
                     if not self.raton.hpp.ping(timeout=0.5):
                         raise OSError("sin respuesta")
+                    await self._mirar_dpi()
                     self._reponer_si_ha_derivado()
                 except Exception:
                     log.info("se ha perdido el ratón")
@@ -113,7 +117,27 @@ class Demonio:
                      f" ({motivo})" if motivo else "")
         if self.servicio is not None:
             self.servicio.emitir_perfil(perfil.id)
+        # Este cambio lo hemos hecho nosotros: no hay que avisar de él como si
+        # el usuario hubiera pulsado el botón del ratón. Se vuelve a tomar la
+        # referencia en la siguiente vuelta.
+        self._dpi_visto = None
         return [str(c) for c in cambios]
+
+    async def _mirar_dpi(self) -> None:
+        """Avisa si el DPI ha cambiado sin que lo hayamos pedido nosotros.
+
+        Pasa cuando pulsas el botón del propio ratón: nadie nos lo cuenta, así
+        que hay que verlo mirando.
+        """
+        if self.raton is None or self.raton.dpi is None:
+            return
+        try:
+            ahora = self.raton.dpi.get().actual
+        except Exception:
+            return
+        if self._dpi_visto is not None and ahora != self._dpi_visto:
+            await self.avisar(f"{ahora} DPI", "Sensibilidad del ratón")
+        self._dpi_visto = ahora
 
     def _reponer_si_ha_derivado(self) -> None:
         """Vuelve a poner el perfil activo si el ratón se ha desviado.
@@ -214,6 +238,31 @@ class Demonio:
         for v in vigilantes:
             await v.parar()
         log.info("adiós")
+
+    async def avisar(self, texto: str, cuerpo: str = "") -> None:
+        """Manda un aviso al escritorio, si hay quien lo reciba.
+
+        Es lo que hace útil el botón de cambiar DPI: pulsarlo sin saber a qué
+        has saltado no sirve de mucho, y el ratón no tiene pantalla. Si el
+        escritorio no expone el servicio de notificaciones, no pasa nada.
+        """
+        if self._bus is None:
+            return
+        try:
+            introspeccion = await self._bus.introspect(
+                "org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+            objeto = self._bus.get_proxy_object(
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications", introspeccion)
+            iface = objeto.get_interface("org.freedesktop.Notifications")
+            # El id 0 crea un aviso nuevo; devolver el suyo y reutilizarlo hace
+            # que se sustituya en pantalla en vez de apilarse al pulsar varias
+            # veces seguidas.
+            self._id_aviso = await iface.call_notify(
+                "gpx2", self._id_aviso, "input-mouse", texto, cuerpo, [],
+                {}, 2500)
+        except Exception as e:
+            log.debug("no se pudo avisar al escritorio: %s", e)
 
     async def _publicar_dbus(self) -> None:
         try:

@@ -401,6 +401,7 @@ def escuchar_botones(dispositivo: str, segundos: float = 20.0) -> None:
         return
 
     cuenta: dict[int, int] = {}
+    eventos: list[tuple[float, int, int]] = []
     fin = time.monotonic() + segundos
     try:
         while time.monotonic() < fin:
@@ -412,13 +413,17 @@ def escuchar_botones(dispositivo: str, segundos: float = 20.0) -> None:
             except BlockingIOError:
                 continue
             for i in range(0, len(datos) - TAM_EVENTO + 1, TAM_EVENTO):
-                _, _, tipo, codigo, valor = struct.unpack(
+                seg, useg, tipo, codigo, valor = struct.unpack(
                     FORMATO_EVENTO, datos[i:i + TAM_EVENTO])
-                if tipo != EV_KEY or valor != 1:      # sólo al pulsar
+                if tipo != EV_KEY or valor not in (0, 1):
                     continue
-                cuenta[codigo] = cuenta.get(codigo, 0) + 1
+                t = seg + useg / 1_000_000
+                eventos.append((t, codigo, valor))
+                if valor == 1:
+                    cuenta[codigo] = cuenta.get(codigo, 0) + 1
                 nombre = BOTONES_KERNEL.get(codigo, f"código 0x{codigo:03X}")
-                print(f"     pulsado: {nombre}")
+                desde = f"  (+{(t - eventos[0][0]) * 1000:7.1f} ms)" if eventos else ""
+                print(f"     {'PULSA ' if valor else 'suelta'} {nombre}{desde}")
     finally:
         os.close(fd)
 
@@ -426,9 +431,31 @@ def escuchar_botones(dispositivo: str, segundos: float = 20.0) -> None:
         print("\n     No llegó ninguna pulsación.")
         print("     Si estabas pulsando, el ratón no las está mandando por aquí.")
         return
-    print("\n     Resumen:")
+
+    print("\n     Resumen de pulsaciones:")
     for codigo, veces in sorted(cuenta.items()):
         print(f"       {BOTONES_KERNEL.get(codigo, hex(codigo)):32} x{veces}")
+
+    # Dos pulsaciones del mismo botón muy seguidas no las hace un dedo: o es
+    # rebote del interruptor, o el ratón las está duplicando.
+    rebotes = []
+    ultima: dict[int, float] = {}
+    for t, codigo, valor in eventos:
+        if valor != 1:
+            continue
+        if codigo in ultima and (t - ultima[codigo]) < 0.08:
+            rebotes.append((codigo, (t - ultima[codigo]) * 1000))
+        ultima[codigo] = t
+    if rebotes:
+        print("\n     *** PULSACIONES DUPLICADAS, demasiado seguidas para ser "
+              "tuyas: ***")
+        for codigo, ms in rebotes:
+            print(f"       {BOTONES_KERNEL.get(codigo, hex(codigo))}  a {ms:.1f} ms "
+                  "de la anterior")
+        print("     Un dedo no baja de unos 80 ms. Esto es rebote del "
+              "interruptor o\n     el ratón mandando el clic dos veces.")
+    else:
+        print("\n     Sin pulsaciones duplicadas: cada clic llegó una sola vez.")
 
 
 def bloque_escuchar(segundos: float) -> None:

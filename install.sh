@@ -39,7 +39,9 @@ chmod +x "$BIN/gpx2d"
 
 UNIDADES="$HOME/.config/systemd/user"
 mkdir -p "$UNIDADES"
-install -m644 "$RAIZ/data/gpx2d.service" "$UNIDADES/gpx2d.service"
+sed "s|^ExecStart=/usr/bin/gpx2d$|ExecStart=$BIN/gpx2d|" \
+    "$RAIZ/data/gpx2d.service" > "$UNIDADES/gpx2d.service"
+chmod 644 "$UNIDADES/gpx2d.service"
 systemctl --user daemon-reload 2>/dev/null || true
 
 update-desktop-database "$APPS" 2>/dev/null || true

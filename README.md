@@ -124,3 +124,7 @@ gpx2/
 ├── mock.py        SL2 simulado, para desarrollar sin hardware
 └── gui/           interfaz PySide6
 ```
+
+## Licencia
+
+MIT. Ver `LICENSE`.

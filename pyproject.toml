@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpx2"
+dynamic = ["version"]
+description = "Configurador de ratones Logitech por HID++ 2.0, con perfiles por juego"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "rcv11x" }]
+keywords = ["logitech", "hidpp", "mouse", "dpi", "linux"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Hardware",
+]
+
+# Sólo dos, y las dos están empaquetadas en las distribuciones. Todo lo demás
+# es biblioteca estándar, a propósito.
+dependencies = [
+    "PySide6",
+    "dbus-next",
+]
+
+[project.urls]
+Homepage = "https://github.com/rcv11x/gpx2"
+
+[project.scripts]
+gpx2 = "gpx2.cli:gui"
+gpx2d = "gpx2.cli:daemon"
+
+[tool.setuptools]
+packages = ["gpx2", "gpx2.gui", "gpx2.watcher"]
+
+[tool.setuptools.dynamic]
+version = { attr = "gpx2.__version__" }

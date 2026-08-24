@@ -7,7 +7,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/gpx2d
+ExecStart=/usr/bin/gpx2d
 Restart=on-failure
 RestartSec=5
 # No necesita privilegios: el acceso al ratón lo da la regla udev.

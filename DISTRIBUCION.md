@@ -26,7 +26,10 @@ Es lo único que puede dejar el sistema **bien configurado de una sola vez**:
 la regla udev, el `.desktop`, el icono y (más adelante) el servicio systemd.
 
 - **CachyOS / Arch → un `PKGBUILD` en el AUR.** Es tu distro de casa y es lo
-  idiomático allí. Un PKGBUILD para un proyecto Python son unas 25 líneas.
+  idiomático allí. **Ya está escrito** (`PKGBUILD`, para `gpx2-git`): construye
+  el wheel, ejecuta las pruebas en `check()` e instala la regla udev, el
+  `.desktop`, el icono y la unidad de systemd en sus rutas de sistema. Sin
+  subir al AUR todavía, a la espera de pulir el programa.
 - **Fedora → un COPR.** Igual de sencillo, y así lo tienes también en el trabajo.
 
 No es casualidad que libratbag, Piper y Solaar se distribuyan así en primer

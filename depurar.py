@@ -469,6 +469,99 @@ def bloque_escuchar(segundos: float) -> None:
     escuchar_botones(elegido[0], segundos)
 
 
+def mapa_de_botones(dispositivos: list[str], espera: float = 6.0) -> None:
+    """Pregunta por cada botón y anota qué llega. Sin ambigüedades.
+
+    Escuchar y contar deja siempre la duda de qué botón se pulsó de verdad.
+    Aquí se pide uno concreto y se mira qué aparece, así que el resultado es
+    una tabla de "pulsaste esto, llegó aquello".
+
+    Escucha TODOS los nodos del ratón a la vez: si en algún modo los eventos
+    salieran por otro sitio, se vería.
+    """
+    fds = {}
+    for dev in dispositivos:
+        try:
+            fds[os.open(dev, os.O_RDONLY | os.O_NONBLOCK)] = dev
+        except OSError as e:
+            print(f"  no se pudo abrir {dev}: {e}")
+    if not fds:
+        return
+
+    pedidos = [
+        ("CLIC IZQUIERDO", 0x110),
+        ("CLIC DERECHO", 0x111),
+        ("CLIC CENTRAL (la rueda)", 0x112),
+        ("LATERAL TRASERO (atrás)", 0x113),
+        ("LATERAL DELANTERO (adelante)", 0x114),
+    ]
+    resultados = []
+    try:
+        for etiqueta, esperado in pedidos:
+            print(f"\n  ► Pulsa el {etiqueta}  (tienes {espera:.0f} s, "
+                  "o espera para saltarlo)")
+            recibido, nodo = None, None
+            fin = time.monotonic() + espera
+            while time.monotonic() < fin and recibido is None:
+                listos, _, _ = select.select(list(fds), [], [],
+                                             max(0.0, fin - time.monotonic()))
+                for fd in listos:
+                    try:
+                        datos = os.read(fd, TAM_EVENTO * 64)
+                    except BlockingIOError:
+                        continue
+                    for i in range(0, len(datos) - TAM_EVENTO + 1, TAM_EVENTO):
+                        _, _, tipo, codigo, valor = struct.unpack(
+                            FORMATO_EVENTO, datos[i:i + TAM_EVENTO])
+                        if tipo == EV_KEY and valor == 1 and recibido is None:
+                            recibido, nodo = codigo, fds[fd]
+            if recibido is None:
+                print("     (nada)")
+            else:
+                nombre = BOTONES_KERNEL.get(recibido, f"0x{recibido:03X}")
+                marca = "OK" if recibido == esperado else "← NO COINCIDE"
+                print(f"     llegó: {nombre}   por {nodo}   {marca}")
+            resultados.append((etiqueta, esperado, recibido))
+            # Vaciar lo que haya quedado antes de pedir el siguiente.
+            time.sleep(0.4)
+            for fd in fds:
+                try:
+                    while os.read(fd, TAM_EVENTO * 64):
+                        pass
+                except (BlockingIOError, OSError):
+                    pass
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+    print("\n  Resumen:")
+    fallos = 0
+    for etiqueta, esperado, recibido in resultados:
+        if recibido is None:
+            estado = "sin pulsar"
+        elif recibido == esperado:
+            estado = "correcto"
+        else:
+            estado = f"llega como {BOTONES_KERNEL.get(recibido, hex(recibido))}"
+            fallos += 1
+        print(f"     {etiqueta:32} {estado}")
+    if fallos:
+        print(f"\n     *** {fallos} botón(es) mandan un código que no es el suyo ***")
+    else:
+        print("\n     Todos los botones mandan lo que les toca.")
+
+
+def bloque_mapa(espera: float) -> None:
+    titulo("MAPA DE BOTONES: qué pulsas y qué llega")
+    punteros = punteros_del_sistema()
+    logitech = [p[0] for p in punteros if p[2].startswith("046d")]
+    if not logitech:
+        print("  No se encontró ningún puntero de Logitech.")
+        return
+    print(f"  Escuchando: {', '.join(logitech)}")
+    mapa_de_botones(logitech, espera)
+
+
 def bloque_medir(segundos: float) -> None:
     titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
     punteros = punteros_del_sistema()
@@ -1229,6 +1322,9 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--mapa-botones", nargs="?", const=6.0, type=float,
+                    metavar="SEGUNDOS",
+                    help="te pide cada botón y anota qué código llega")
     ap.add_argument("--botones-en-vivo", nargs="?", const=20.0, type=float,
                     metavar="SEGUNDOS",
                     help="enseña qué botones recibe el kernel al pulsarlos")
@@ -1244,6 +1340,10 @@ def main() -> int:
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
+
+    if args.mapa_botones:
+        bloque_mapa(args.mapa_botones)
+        return 0
 
     if args.botones_en_vivo:
         bloque_escuchar(args.botones_en_vivo)

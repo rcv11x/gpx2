@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath,
+                           QPalette, QPen)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                                QSizePolicy, QSlider, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
@@ -240,6 +241,175 @@ class FilaSliderLista(QWidget):
         self.slider.setValue(i)
         self.slider.blockSignals(False)
         self.valor.setText(f"{self._valores[i]}{self._sufijo}")
+
+
+class DiagramaRaton(QWidget):
+    """Esquema de un ratón con lo que hace cada botón, y una guía a su etiqueta.
+
+    Es un dibujo nuestro y genérico, no una foto: no tenemos derechos sobre las
+    imágenes de ningún fabricante, y un esquema vale para cualquier modelo y se
+    adapta al tema del escritorio. Las posiciones son las de un ratón de cinco
+    botones diestro, que es la disposición de casi todos.
+    """
+
+    pulsado = Signal(int)
+
+    # Para cada botón: dónde está sobre el cuerpo (x, y), a qué altura va su
+    # etiqueta y de qué lado. La etiqueta no va a la altura del punto a
+    # propósito: el clic derecho y la rueda están casi juntos y sus textos se
+    # pisarían. La línea guía se encarga de unirlos.
+    #             x     y   etiqueta  lado
+    SITIOS = [
+        (0.28, 0.15, 0.10, "izquierda"),    # clic izquierdo
+        (0.72, 0.15, 0.10, "derecha"),      # clic derecho
+        (0.50, 0.20, 0.32, "derecha"),      # central / rueda
+        (0.05, 0.34, 0.36, "izquierda"),    # lateral trasero
+        (0.05, 0.45, 0.56, "izquierda"),    # lateral delantero
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.acciones: list[str] = []
+        self.resaltado: int | None = None
+        self.setMinimumHeight(360)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+
+    def poner(self, acciones: list[str]) -> None:
+        self.acciones = list(acciones)
+        self.update()
+
+    # -- geometría ------------------------------------------------------------
+
+    def _cuerpo(self) -> QRectF:
+        """El contorno del ratón, centrado y dejando sitio a las etiquetas."""
+        alto = self.height() - 24
+        ancho = alto * 0.62
+        return QRectF((self.width() - ancho) / 2, 12, ancho, alto)
+
+    def _punto(self, i: int) -> QPointF:
+        c = self._cuerpo()
+        x, y = self.SITIOS[i][0], self.SITIOS[i][1]
+        return QPointF(c.left() + c.width() * x, c.top() + c.height() * y)
+
+    def _zona_etiqueta(self, i: int) -> QRectF:
+        c = self._cuerpo()
+        y, lado = self.SITIOS[i][2], self.SITIOS[i][3]
+        alto = 26
+        cy = c.top() + c.height() * y - alto / 2
+        margen = 12
+        if lado == "izquierda":
+            return QRectF(margen, cy, c.left() - margen * 2, alto)
+        return QRectF(c.right() + margen, cy,
+                      self.width() - c.right() - margen * 2, alto)
+
+    # -- pintado --------------------------------------------------------------
+
+    def paintEvent(self, evento) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = self.palette()
+        texto = pal.color(QPalette.ColorRole.WindowText)
+        realce = pal.color(QPalette.ColorRole.Highlight)
+        linea = mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.35)
+
+        c = self._cuerpo()
+
+        # Cuerpo: un óvalo alargado con la parte de abajo más recta, que es la
+        # silueta de un ratón visto desde arriba.
+        camino = QPainterPath()
+        camino.moveTo(c.center().x(), c.top())
+        camino.cubicTo(c.right(), c.top() + c.height() * 0.02,
+                       c.right(), c.top() + c.height() * 0.45,
+                       c.right() - c.width() * 0.03, c.top() + c.height() * 0.72)
+        camino.cubicTo(c.right() - c.width() * 0.06, c.bottom(),
+                       c.left() + c.width() * 0.06, c.bottom(),
+                       c.left() + c.width() * 0.03, c.top() + c.height() * 0.72)
+        camino.cubicTo(c.left(), c.top() + c.height() * 0.45,
+                       c.left(), c.top() + c.height() * 0.02,
+                       c.center().x(), c.top())
+        p.setPen(QPen(linea, 1.6))
+        p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.06))
+        p.drawPath(camino)
+
+        # La raya que separa los dos clics principales, y la rueda.
+        p.setPen(QPen(linea, 1.2))
+        p.drawLine(QPointF(c.center().x(), c.top() + c.height() * 0.02),
+                   QPointF(c.center().x(), c.top() + c.height() * 0.34))
+        rueda = QRectF(c.center().x() - c.width() * 0.055,
+                       c.top() + c.height() * 0.11,
+                       c.width() * 0.11, c.height() * 0.13)
+        p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.18))
+        p.drawRoundedRect(rueda, rueda.width() / 2, rueda.width() / 2)
+
+        # Los dos laterales.
+        for i in (3, 4):
+            if i >= len(self.acciones):
+                continue
+            pt = self._punto(i)
+            lateral = QRectF(pt.x() - c.width() * 0.015, pt.y() - c.height() * 0.035,
+                             c.width() * 0.07, c.height() * 0.07)
+            p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.18))
+            p.drawRoundedRect(lateral, 3, 3)
+
+        # Guías y etiquetas.
+        fuente = QFont(self.font())
+        fuente.setPointSizeF(max(8.0, fuente.pointSizeF() - 0.5))
+        p.setFont(fuente)
+        for i, accion in enumerate(self.acciones[:len(self.SITIOS)]):
+            activo = i == self.resaltado
+            color = realce if activo else linea
+            pt = self._punto(i)
+            zona = self._zona_etiqueta(i)
+            lado = self.SITIOS[i][3]
+            # La guía sale del texto HACIA el ratón, con un hueco para no
+            # tocarlo: un tramo recto y luego la diagonal hasta el botón.
+            hacia = 1 if lado == "izquierda" else -1
+            borde = zona.right() if lado == "izquierda" else zona.left()
+            anclaje = QPointF(borde + 8 * hacia, zona.center().y())
+            codo = QPointF(anclaje.x() + 16 * hacia, anclaje.y())
+
+            p.setPen(QPen(color, 2.0 if activo else 1.2))
+            p.drawLine(anclaje, codo)
+            p.drawLine(codo, pt)
+            p.setBrush(color)
+            p.drawEllipse(pt, 3.5, 3.5)
+
+            p.setPen(realce if activo else texto)
+            alineacion = (Qt.AlignmentFlag.AlignRight if lado == "izquierda"
+                          else Qt.AlignmentFlag.AlignLeft)
+            p.drawText(zona, int(alineacion | Qt.AlignmentFlag.AlignVCenter),
+                       f"{i + 1}. {accion}")
+        p.end()
+
+    # -- interacción ----------------------------------------------------------
+
+    def _cerca_de(self, pos) -> int | None:
+        for i in range(min(len(self.acciones), len(self.SITIOS))):
+            if self._zona_etiqueta(i).adjusted(-8, -6, 8, 6).contains(pos):
+                return i
+            pt = self._punto(i)
+            if (pt.x() - pos.x()) ** 2 + (pt.y() - pos.y()) ** 2 < 18 ** 2:
+                return i
+        return None
+
+    def mouseMoveEvent(self, evento) -> None:
+        i = self._cerca_de(evento.position())
+        if i != self.resaltado:
+            self.resaltado = i
+            self.setCursor(Qt.CursorShape.PointingHandCursor if i is not None
+                           else Qt.CursorShape.ArrowCursor)
+            self.update()
+
+    def leaveEvent(self, evento) -> None:
+        self.resaltado = None
+        self.update()
+
+    def mousePressEvent(self, evento) -> None:
+        i = self._cerca_de(evento.position())
+        if i is not None:
+            self.pulsado.emit(i)
 
 
 def pastilla(texto: str) -> QLabel:

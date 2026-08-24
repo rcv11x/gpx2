@@ -21,8 +21,8 @@ from ..device import Discovery, Mouse, discover
 from ..hidpp import IDX_DIRECT
 from ..engine import Motor
 from ..profiles import Almacen, Perfil
-from .widgets import (ColumnaCentrada, DelegadoDispositivo, FilaSlider,
-                      FilaSliderLista,
+from .widgets import (ColumnaCentrada, DelegadoDispositivo,
+                      DiagramaRaton, FilaSlider, FilaSliderLista,
                       ROL_ENCABEZADO, ROL_SUB, Tarjeta, hoja_de_estilo,
                       pastilla)
 
@@ -416,6 +416,12 @@ class PaginaRaton(QWidget):
             "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
             "modo onboard: en modo host manda el firmware y estos ajustes no se "
             "aplican.")
+        # El esquema es un dibujo genérico de ratón diestro de cinco botones,
+        # que es la disposición de casi todos. Pulsar en uno lleva el foco a su
+        # desplegable, para no tener que contar cuál es cuál.
+        self._diagrama = DiagramaRaton()
+        self._diagrama.pulsado.connect(self._enfocar_boton)
+        t_bot.añadir(self._diagrama)
         for i, b in enumerate(perfil.botones):
             fila = QWidget()
             lay = QHBoxLayout(fila)
@@ -432,8 +438,10 @@ class PaginaRaton(QWidget):
                 combo.addItem(actual, None)
             combo.setCurrentText(actual)
             lay.addWidget(combo, 1)
+            combo.currentIndexChanged.connect(self._refrescar_diagrama)
             t_bot.añadir(fila)
             self._combos_boton.append(combo)
+        self._refrescar_diagrama()
 
         btn_bot = QPushButton("Guardar los botones en el ratón")
         btn_bot.clicked.connect(self._guardar_botones)
@@ -465,6 +473,18 @@ class PaginaRaton(QWidget):
         t_guardar.añadir(btn_guardar)
 
         return _columna(cabecera, t_modo, t_bot, t_guardar)
+
+    def _refrescar_diagrama(self) -> None:
+        """El esquema enseña lo que hay elegido ahora, no lo que está guardado."""
+        diagrama = getattr(self, "_diagrama", None)
+        if diagrama is not None:
+            diagrama.poner([c.currentText() for c in self._combos_boton])
+
+    def _enfocar_boton(self, indice: int) -> None:
+        if 0 <= indice < len(self._combos_boton):
+            combo = self._combos_boton[indice]
+            combo.setFocus()
+            combo.showPopup()
 
     def _copia_sector(self) -> str:
         """Guarda el sector original antes de tocarlo, y devuelve la ruta."""
@@ -1115,7 +1135,7 @@ class VentanaPrincipal(QMainWindow):
         self.demo = demo
         self.setWindowTitle("gpx2 — control de ratones Logitech"
                             + ("  ·  MODO DEMO" if demo else ""))
-        self.resize(1040, 700)
+        self.resize(1220, 840)
         self.hallazgo: Discovery | None = None
 
         divisor = QSplitter(Qt.Orientation.Horizontal)

@@ -49,6 +49,22 @@ def _ocupado(widget: QWidget, texto: str):
         QApplication.restoreOverrideCursor()
 
 
+def _suelto(*widgets: QWidget) -> QWidget:
+    """Botones a su ancho natural, no estirados de lado a lado.
+
+    Un botón que ocupa toda la tarjeta parece un banner y no invita a
+    pulsarlo; además su tamaño deja de decir nada de su importancia.
+    """
+    caja = QWidget()
+    fila = QHBoxLayout(caja)
+    fila.setContentsMargins(0, 0, 0, 0)
+    fila.setSpacing(8)
+    for w in widgets:
+        fila.addWidget(w)
+    fila.addStretch(1)
+    return caja
+
+
 def _avisar(widget: QWidget, texto: str, ms: int = 5000) -> None:
     """Mensaje en la barra de estado, si la hay.
 
@@ -196,15 +212,21 @@ class PaginaRaton(QWidget):
 
         # Con el cambio automático por juego, saber qué perfil manda es lo
         # primero que uno quiere ver, y estaba escondido en otra pestaña.
+        # Va en pastilla porque es un estado que cambia solo; la batería no,
+        # que es un dato y punto: en pastilla parecía un botón sin función.
         self.pastilla_perfil = pastilla("")
+        self.pastilla_perfil.setObjectName("PastillaPerfil")
         self.pastilla_perfil.setVisible(False)
         lay.addWidget(self.pastilla_perfil)
+        lay.addSpacing(14)
 
         bat = self.estado.get("battery")
-        self.pastilla_bateria = None
+        self.pastilla_bateria = QLabel()
+        self.pastilla_bateria.setObjectName("Bateria")
+        self.pastilla_bateria.setVisible(bool(bat and bat.percent is not None))
         if bat and bat.percent is not None:
-            self.pastilla_bateria = pastilla(self._texto_bateria(bat))
-            lay.addWidget(self.pastilla_bateria)
+            self.pastilla_bateria.setText(self._texto_bateria(bat))
+        lay.addWidget(self.pastilla_bateria)
         self._refrescar_perfil_activo()
         return caja
 
@@ -356,7 +378,7 @@ class PaginaRaton(QWidget):
         t.añadir(self.lbl_desfase)
         self.btn_guardar_perfil = QPushButton()
         self.btn_guardar_perfil.clicked.connect(self._guardar_en_perfil)
-        t.añadir(self.btn_guardar_perfil)
+        t.añadir(_suelto(self.btn_guardar_perfil))
         self._refrescar_desfase()
         self._marcar_nivel(dpi.actual)
         return t
@@ -514,7 +536,7 @@ class PaginaRaton(QWidget):
         btn_modo = QPushButton()
         self._pintar_boton_modo(btn_modo)
         btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
-        t_modo.añadir(btn_modo)
+        t_modo.añadir(_suelto(btn_modo))
         self._pintar_aviso_modo()
 
         # -- niveles de sensibilidad -------------------------------------------
@@ -562,7 +584,7 @@ class PaginaRaton(QWidget):
 
         btn_niv = QPushButton("Guardar los niveles en el ratón")
         btn_niv.clicked.connect(self._guardar_niveles)
-        t_niv.añadir(btn_niv)
+        t_niv.añadir(_suelto(btn_niv))
 
         # -- botones ----------------------------------------------------------
         t_bot = Tarjeta(
@@ -599,7 +621,7 @@ class PaginaRaton(QWidget):
 
         btn_bot = QPushButton("Guardar los botones en el ratón")
         btn_bot.clicked.connect(self._guardar_botones)
-        t_bot.añadir(btn_bot)
+        t_bot.añadir(_suelto(btn_bot))
 
         # -- guardar los ajustes de ahora --------------------------------------
         dpi = self.estado.get("dpi")
@@ -624,7 +646,7 @@ class PaginaRaton(QWidget):
         t_guardar.añadir(aviso)
         btn_guardar = QPushButton("Guardar en el ratón")
         btn_guardar.clicked.connect(self._guardar_ajustes_ob)
-        t_guardar.añadir(btn_guardar)
+        t_guardar.añadir(_suelto(btn_guardar))
 
         return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
 

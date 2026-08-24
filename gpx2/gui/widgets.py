@@ -50,6 +50,19 @@ def hoja_de_estilo(pal: QPalette) -> str:
         border-radius: 9px;
         padding: 2px 10px;
     }}
+    /* El perfil que manda: una pastilla ajustada, no un bloque. */
+    QLabel#PastillaPerfil {{
+        background: {mezclar(ventana, realce, 0.22).name()};
+        border: 1px solid {mezclar(borde_col, realce, 0.45).name()};
+        border-radius: 11px;
+        padding: 3px 12px;
+        font-weight: 600;
+    }}
+    /* La batería es un dato, no algo que se pulse: sin caja y algo mayor. */
+    QLabel#Bateria {{
+        font-size: 12pt;
+        color: {mezclar(ventana, texto, 0.85).name()};
+    }}
     /* Sólo la lista de dispositivos: es la que lleva el delegado con dos
        líneas por entrada. Las demás listas del programa se quedan con el
        estilo nativo, que para una lista normal se ve mejor. */

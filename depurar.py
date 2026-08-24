@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Banco de pruebas HID++ — ingeniería inversa con el ratón delante.
+
+No usa los decodificadores de `gpx2.features`: habla directamente con el
+dispositivo y enseña los bytes en crudo. La idea es justo esa — si el
+decodificador estuviera bien no haría falta esta herramienta.
+
+    sudo python3 depurar.py                # sólo lee, no toca nada
+    sudo python3 depurar.py --escribir     # además prueba escrituras
+    sudo python3 depurar.py --escribir --dpi 3200
+
+Toda escritura se hace anotando antes el valor original y restaurándolo al
+final, y sólo afecta a DPI / modo onboard: nada que pueda dejar el ratón
+inservible.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from gpx2.hidpp import (IDX_DIRECT, IDX_RECEIVER, Hidpp, HidppError,
+                        NoResponse)
+from gpx2.transport import RawChannel, enumerate_nodes
+
+
+# ---------------------------------------------------------------------------
+# Utilidades de presentación
+# ---------------------------------------------------------------------------
+
+def titulo(texto: str) -> None:
+    print(f"\n{'=' * 72}\n{texto}\n{'=' * 72}")
+
+
+def hx(datos: bytes) -> str:
+    return datos.hex(" ")
+
+
+def u16(datos: bytes, i: int) -> int:
+    return int.from_bytes(datos[i:i + 2], "big")
+
+
+class Sonda:
+    """Envuelve un Hidpp para llamar por fid (no por índice) y no reventar."""
+
+    def __init__(self, hpp: Hidpp):
+        self.hpp = hpp
+        self.tabla = hpp.features()
+
+    def tiene(self, fid: int) -> bool:
+        return fid in self.tabla
+
+    def llamar(self, fid: int, func: int, params: bytes = b"") -> bytes | None:
+        """Devuelve el payload, o None si falló (imprimiendo el motivo)."""
+        if fid not in self.tabla:
+            return None
+        try:
+            return self.hpp.call(self.tabla[fid].index, func, params)
+        except (HidppError, NoResponse, OSError):
+            return None
+
+    def mostrar(self, etiqueta: str, fid: int, func: int,
+                params: bytes = b"") -> bytes | None:
+        """Llama e imprime la línea del volcado. Devuelve el payload o None."""
+        if fid not in self.tabla:
+            print(f"  {etiqueta:44} — feature ausente")
+            return None
+        try:
+            r = self.hpp.call(self.tabla[fid].index, func, params)
+        except (HidppError, NoResponse, OSError) as e:
+            print(f"  {etiqueta:44} ⚠ {e}")
+            return None
+        print(f"  {etiqueta:44} {hx(r)}")
+        return r
+
+
+# ---------------------------------------------------------------------------
+# Descubrimiento
+# ---------------------------------------------------------------------------
+
+def encontrar(nodo_forzado: str | None):
+    """Devuelve (nodo, canal, hpp) del primer ratón que conteste, o None."""
+    for node in enumerate_nodes():
+        if nodo_forzado and node.path != nodo_forzado:
+            continue
+        if not (node.hidpp and node.is_logitech):
+            continue
+        ch = RawChannel(node.path)
+        for idx in [IDX_DIRECT, *IDX_RECEIVER]:
+            try:
+                ver = Hidpp(ch, idx).ping(timeout=0.4)
+            except PermissionError:
+                print(f"  {node.path}: sin permiso (¿falta sudo o la regla udev?)")
+                break
+            except Exception:
+                continue
+            if ver:
+                print(f"  {node.path} · índice 0x{idx:02X} · HID++ {ver[0]}.{ver[1]}")
+                return node, ch, Hidpp(ch, idx)
+        ch.close()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Bloques de diagnóstico
+# ---------------------------------------------------------------------------
+
+def bloque_bateria(s: Sonda) -> None:
+    titulo("BATERÍA (0x1004 UnifiedBattery)")
+    cap = s.mostrar("getCapabilities  f0", 0x1004, 0x00)
+    est = s.mostrar("getStatus        f1", 0x1004, 0x01)
+    if cap:
+        # [0]=nº de niveles admitidos, [1]=flags; bit0 = informa porcentaje real
+        print(f"    niveles admitidos: {cap[0]}   flags: 0x{cap[1]:02X}"
+              f"   ¿porcentaje real?: {'sí' if cap[1] & 0x01 else 'no (sólo niveles)'}")
+    if est:
+        # [0]=carga %, [1]=nivel, [2]=estado de carga, [3]=alimentación externa
+        niveles = {1: "crítico", 2: "bajo", 4: "bueno", 8: "lleno"}
+        print(f"    carga: {est[0]}%   nivel: {niveles.get(est[1], est[1])}"
+              f"   cargando: {'sí' if est[2] else 'no'}")
+
+
+def bloque_modo(s: Sonda, escribir: bool) -> None:
+    titulo("MODO ONBOARD / HOST")
+    print("  -- 0x8090 ModeStatus --")
+    s.mostrar("getModeStatus    f0", 0x8090, 0x00)
+
+    print("  -- 0x8100 OnboardProfiles (el que usa Solaar) --")
+    info = s.mostrar("getOnboardProfilesInfo f0", 0x8100, 0x00)
+    if info:
+        print(f"    modelo de memoria: 0x{info[0]:02X}   formato de perfil: "
+              f"0x{info[1]:02X}   perfiles: {info[3]}")
+    modo = s.mostrar("getOnboardMode         f2", 0x8100, 0x02)
+    if modo:
+        nombres = {0x01: "onboard (manda el ratón)", 0x02: "host (manda el PC)"}
+        print(f"    modo actual: {nombres.get(modo[0], f'desconocido (0x{modo[0]:02X})')}")
+
+    if not escribir:
+        print("\n  (para probar el cambio a modo host, pasa --escribir)")
+        return
+
+    if modo and modo[0] == 0x02:
+        print("\n  Ya está en modo host, no hace falta cambiarlo.")
+        return
+
+    print("\n  Probando setOnboardMode(host) — 0x8100 f1 con 0x02:")
+    s.mostrar("setOnboardMode(0x02)   f1", 0x8100, 0x01, b"\x02")
+    despues = s.mostrar("getOnboardMode         f2", 0x8100, 0x02)
+    if despues and despues[0] == 0x02:
+        print("    ✓ el ratón está ahora en modo host")
+    else:
+        print("    ✗ no cambió; el DPI seguirá mandándolo el perfil onboard")
+
+
+def bloque_rangos(s: Sonda) -> list[int]:
+    """getSensorDpiRanges es un flujo de bytes repartido en páginas.
+
+    Cada página aporta 13 bytes (los 3 primeros son eco de la petición) al
+    MISMO flujo, así que un valor puede quedar partido entre dos páginas. Se
+    piden páginas consecutivas hasta que el flujo termina en 0x0000.
+    """
+    titulo("RANGOS DE DPI (0x2202 f2, flujo paginado)")
+    datos = b""
+    for pagina in range(8):
+        r = s.mostrar(f"f2  getSensorDpiRanges(pág {pagina})", 0x2202, 0x02,
+                      bytes([0x00, 0x00, pagina]))
+        if not r:
+            break
+        datos += r[3:]
+        if datos[-2:] == b"\x00\x00":
+            break
+
+    print(f"\n    flujo completo ({len(datos)} bytes): {hx(datos)}")
+
+    valores: list[int] = []
+    tramos: list[str] = []
+    i = 0
+    while i + 1 < len(datos):
+        v = u16(datos, i)
+        if v == 0:
+            break
+        if (v >> 13) == 0b111:
+            paso = v & 0x1FFF
+            hasta = u16(datos, i + 2)
+            if valores and paso and hasta > valores[-1]:
+                tramos.append(f"de {valores[-1]} a {hasta} en pasos de {paso}")
+                valores += list(range(valores[-1] + paso, hasta + 1, paso))
+            i += 4
+        else:
+            valores.append(v)
+            tramos.append(f"valor suelto {v}")
+            i += 2
+
+    print("\n    tramos declarados:")
+    for t in tramos:
+        print(f"      · {t}")
+    if valores:
+        print(f"\n    → {len(valores)} DPIs válidos, de {min(valores)} "
+              f"a {max(valores)}")
+    return valores
+
+
+def bloque_dpi(s: Sonda) -> dict:
+    """Lee el DPI con los números de función que usa Solaar (5 = leer)."""
+    titulo("DPI (0x2202)")
+    ver = s.tabla[0x2202].version if s.tiene(0x2202) else None
+    print(f"  versión de la feature en este ratón: v{ver}\n")
+
+    s.mostrar("f0  getSensorCount", 0x2202, 0x00)
+    cap = s.mostrar("f1  getSensorCapabilities(0)", 0x2202, 0x01, b"\x00")
+    tiene_y = tiene_lod = False
+    if cap:
+        tiene_y, tiene_lod = bool(cap[2] & 0x01), bool(cap[2] & 0x02)
+        print(f"      → eje Y independiente: {'sí' if tiene_y else 'no'}"
+              f"   ·   distancia de despegue: {'sí' if tiene_lod else 'no'}")
+
+    print()
+    leer = s.mostrar("f5  getSensorDpi  ← el getter de verdad", 0x2202, 0x05,
+                     b"\x00")
+    actual = defecto = lod = None
+    if leer and len(leer) >= 10:
+        # [0]=sensor [1:3]=X [3:5]=X por defecto [5:7]=Y [7:9]=Y por defecto [9]=LOD
+        actual = u16(leer, 1) or u16(leer, 3)
+        defecto = u16(leer, 3)
+        lod = leer[9]
+        print(f"      → DPI actual: {actual}   ·   de fábrica: {defecto}"
+              f"   ·   eje Y: {u16(leer, 5)}   ·   despegue: {lod}")
+
+    print("\n  Las funciones que usábamos antes, para dejar constancia:")
+    s.mostrar("f3  (era lo que creíamos 'DPI actual')", 0x2202, 0x03, b"\x00")
+    s.mostrar("f4", 0x2202, 0x04, b"\x00")
+
+    return {"actual": actual, "defecto": defecto, "lod": lod,
+            "tiene_y": tiene_y, "tiene_lod": tiene_lod}
+
+
+def bloque_escritura_dpi(s: Sonda, estado: dict, validos: list[int],
+                         objetivo: int) -> None:
+    """Escribe el DPI con f6 (el formato de Solaar) y comprueba leyendo."""
+    titulo(f"PRUEBA DE ESCRITURA DE DPI → {objetivo}")
+
+    if validos and objetivo not in validos:
+        objetivo = min(validos, key=lambda v: abs(v - objetivo))
+        print(f"  (ajustado al valor válido más cercano: {objetivo})")
+
+    antes = s.llamar(0x2202, 0x05, b"\x00")
+    print(f"  antes:  f5 = {hx(antes) if antes else '—'}")
+
+    dpi = objetivo.to_bytes(2, "big")
+    lod = bytes([estado.get("lod") or 0]) if estado.get("tiene_lod") else b"\x00"
+    eje_y = dpi if estado.get("tiene_y") else b"\x00\x00"
+    params = b"\x00" + dpi + eje_y + lod
+
+    print(f"\n  → f6  setSensorDpi   params: {hx(params)}")
+    print("     ([sensor, DPI X, DPI Y, distancia de despegue])")
+    try:
+        r = s.hpp.call(s.tabla[0x2202].index, 0x06, params)
+        print(f"     respuesta: {hx(r)}")
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"     ⚠ {e}")
+        return
+
+    despues = s.llamar(0x2202, 0x05, b"\x00")
+    print(f"\n  después: f5 = {hx(despues) if despues else '—'}")
+    if despues and antes and despues != antes:
+        leido = u16(despues, 1) or u16(despues, 3)
+        print(f"\n     *** FUNCIONA: el ratón dice ahora {leido} DPI ***")
+        print("     Mueve el ratón: la velocidad tiene que haber cambiado.")
+    else:
+        print("\n     ✗ el ratón no cambió. Casi seguro que el perfil onboard "
+              "lo está reimponiendo:\n"
+              "       vuelve a lanzarlo con --escribir para pasar a modo host.")
+
+
+def bloque_tasa(s: Sonda) -> None:
+    """Números de función según Solaar: 1 = lista, 2 = leer, 3 = escribir."""
+    titulo("TASA DE REPORTE (0x8061)")
+    MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
+
+    for etiqueta, params in (("por cable", b"\x00"), ("inalámbrico", b"\x01")):
+        r = s.mostrar(f"f0  capacidades ({etiqueta})", 0x8061, 0x00, params)
+        if r:
+            bitmap = int.from_bytes(r[0:2], "big")
+            hz = [MAPEO_HZ[n] for n in range(7) if bitmap & (1 << n)]
+            print(f"      → {sorted(hz, reverse=True)} Hz")
+
+    r = s.mostrar("f1  getReportRateList", 0x8061, 0x01)
+    if r:
+        bitmap = int.from_bytes(r[0:2], "big")
+        hz = [MAPEO_HZ[n] for n in range(7) if bitmap & (1 << n)]
+        print(f"      → lista global: {sorted(hz, reverse=True)} Hz")
+
+    r = s.mostrar("f2  getReportRate  ← la tasa actual", 0x8061, 0x02)
+    if r:
+        idx = r[0]
+        actual = MAPEO_HZ[idx] if idx < len(MAPEO_HZ) else "?"
+        print(f"      → índice {idx} = {actual} Hz")
+
+
+def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None) -> None:
+    """Escribe la tasa de reporte con f3 y verifica leyendo con f2.
+
+    Prueba varios formatos y comprueba el resultado DESPUÉS DE CADA UNO: en
+    este ratón la escritura contesta "sin error" aunque no haya hecho nada, así
+    que no basta con mirar si hubo excepción. La tasa original se restaura al
+    final pase lo que pase.
+    """
+    titulo("PRUEBA DE ESCRITURA DE TASA DE REPORTE (0x8061 f3)")
+    MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
+
+    # 0 = cable, 1 = inalámbrico (comprobado en el PRO X 2 por las dos vías).
+    conexion = 0x00 if s.hpp.index == IDX_DIRECT else 0x01
+    print(f"  conexión actual: {'receptor' if conexion else 'cable'}")
+
+    # La lista que manda es la de la función 1: es la de la conexión actual y
+    # la que decide qué acepta la escritura.
+    caps = s.llamar(0x8061, 0x01)
+    if not caps:
+        print("  No se pudo leer la lista de tasas; se aborta.")
+        return
+    bitmap = int.from_bytes(caps[0:2], "big")
+    permitidos = [n for n in range(7) if bitmap & (1 << n)]
+    print(f"  índices permitidos: {permitidos} "
+          f"= {[MAPEO_HZ[n] for n in permitidos]} Hz")
+
+    antes = s.llamar(0x8061, 0x02)
+    if not antes:
+        print("  No se pudo leer la tasa actual; se aborta.")
+        return
+    idx_original = antes[0]
+    print(f"  tasa actual: índice {idx_original} = "
+          f"{MAPEO_HZ[idx_original] if idx_original < 7 else '?'} Hz")
+
+    if objetivo_hz is not None and objetivo_hz in MAPEO_HZ:
+        idx_destino = MAPEO_HZ.index(objetivo_hz)
+    else:
+        candidatos = [n for n in permitidos if n != idx_original]
+        if not candidatos:
+            print("  El ratón sólo admite una tasa; no hay nada que probar.")
+            return
+        idx_destino = candidatos[-1]
+
+    print(f"\n  Objetivo: índice {idx_destino} = {MAPEO_HZ[idx_destino]} Hz\n")
+
+    def probar(etiqueta: str, params: bytes) -> bool:
+        """Escribe y comprueba leyendo. Devuelve si la tasa cambió de verdad."""
+        try:
+            r = s.hpp.call(s.tabla[0x8061].index, 0x03, params)
+            resp = hx(r)
+        except (HidppError, NoResponse, OSError) as e:
+            print(f"  → {etiqueta:34} {hx(params):17} ⚠ {e}")
+            return False
+        leido = s.llamar(0x8061, 0x02)
+        idx = leido[0] if leido else None
+        # Ojo: "no llegó al objetivo" no es lo mismo que "no hizo nada". Un
+        # formato puede escribir un índice distinto del que pretendíamos, y eso
+        # es justo lo que revela cuál es el formato bueno.
+        if idx == idx_destino:
+            marca = "← CAMBIÓ, es el objetivo"
+        elif idx != idx_original:
+            hz = MAPEO_HZ[idx] if idx is not None and idx < 7 else "?"
+            marca = f"← CAMBIÓ a {idx} ({hz} Hz), NO al objetivo"
+        else:
+            marca = f"(sigue en {idx})"
+        print(f"  → {etiqueta:34} {hx(params):17} resp {resp[:11]}…  {marca}")
+        return idx == idx_destino
+
+    d = idx_destino
+    variantes = [
+        ("f3 [idx]  (lo que hace Solaar)", bytes([d])),
+        ("f3 [conexión, idx]",             bytes([conexion, d])),
+        ("f3 [idx, 0, 0]",                 bytes([d, 0, 0])),
+        # Con 4+ parámetros el paquete pasa a ser un informe largo (0x11).
+        ("f3 [idx] en informe largo",      bytes([d, 0, 0, 0])),
+        ("f3 [conexión, idx] largo",       bytes([conexion, d, 0, 0])),
+    ]
+
+    funciono = False
+    for etiqueta, params in variantes:
+        if probar(etiqueta, params):
+            print(f"\n     *** FUNCIONA con {etiqueta}: {MAPEO_HZ[d]} Hz ***")
+            funciono = True
+            break
+
+    if not funciono:
+        print("\n     ✗ ningún formato cambió la tasa.")
+        modo = s.llamar(0x8100, 0x02)
+        if modo:
+            print(f"       modo onboard/host en este momento: 0x{modo[0]:02X} "
+                  f"({'onboard' if modo[0] == 0x01 else 'host'})")
+        print("       Si está en host y aun así no cambia, lo más probable es "
+              "que\n       la tasa la fije el enlace inalámbrico y no se pueda "
+              "tocar por\n       receptor. Contrástalo con Solaar (ver más abajo).")
+
+    print(f"\n  Restaurando la tasa original (índice {idx_original} = "
+          f"{MAPEO_HZ[idx_original] if idx_original < 7 else '?'} Hz)…")
+    try:
+        s.hpp.call(s.tabla[0x8061].index, 0x03, bytes([idx_original]))
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"     ⚠ {e}")
+    final = s.llamar(0x8061, 0x02)
+    if final and final[0] == idx_original:
+        print("     ✓ restaurada")
+    else:
+        print(f"     ⚠ quedó en el índice {final[0] if final else '?'}")
+
+
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--nodo", help="forzar un /dev/hidrawN concreto")
+    ap.add_argument("--escribir", action="store_true",
+                    help="además de leer, prueba escrituras (DPI y modo)")
+    ap.add_argument("--dpi", type=int, default=3200,
+                    help="DPI objetivo para la prueba de escritura")
+    ap.add_argument("--hz", type=int,
+                    help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--solo-tasa", action="store_true",
+                    help="prueba únicamente la escritura de la tasa de reporte")
+    args = ap.parse_args()
+
+    titulo("DISPOSITIVO")
+    hallazgo = encontrar(args.nodo)
+    if not hallazgo:
+        print("  No se encontró ningún ratón HID++. ¿Hace falta sudo?")
+        return 1
+    node, ch, hpp = hallazgo
+
+    try:
+        s = Sonda(hpp)
+    except Exception as e:
+        print(f"  No se pudo leer la tabla de features: {e}")
+        return 1
+
+    print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
+
+    bloque_bateria(s)
+    bloque_modo(s, args.escribir)
+    estado, validos = {}, []
+    if s.tiene(0x2202):
+        estado = bloque_dpi(s)
+        validos = bloque_rangos(s)
+    bloque_tasa(s)
+
+    if args.escribir and s.tiene(0x2202) and not args.solo_tasa:
+        bloque_escritura_dpi(s, estado, validos, args.dpi)
+
+    if args.escribir and s.tiene(0x8061):
+        bloque_escritura_tasa(s, args.hz)
+
+    print("\n")
+    ch.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

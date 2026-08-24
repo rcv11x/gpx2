@@ -28,7 +28,8 @@ def hoja_de_estilo(pal: QPalette) -> str:
     realce = pal.color(QPalette.ColorRole.Highlight)
     borde_col = mezclar(ventana, texto, 0.18)
     borde = borde_col.name()
-    tarjeta = mezclar(base, ventana, 0.35).name()
+    tarjeta_col = mezclar(base, ventana, 0.35)
+    tarjeta = tarjeta_col.name()
     lateral = mezclar(ventana, base, 0.45).name()
     suave = mezclar(ventana, texto, 0.45).name()
 
@@ -52,8 +53,32 @@ def hoja_de_estilo(pal: QPalette) -> str:
     QListWidget::item {{ padding: 9px 12px; border-radius: 8px; margin: 2px 6px; }}
     QListWidget::item:selected {{ background: {realce.name()}; color: {pal.color(QPalette.ColorRole.HighlightedText).name()}; }}
     QTabWidget::pane {{ border: none; }}
+    /* Los 18px son los mismos que el margen de las tarjetas y la cabecera:
+       sin esto la primera pestaña queda desalineada con todo lo de abajo.
+       Tiene que ser `QTabWidget::tab-bar` con `left`: un margin sobre QTabBar
+       lo ignora Qt, porque a la barra la coloca el QTabWidget. */
+    QTabWidget::tab-bar {{ left: 18px; }}
     QTabBar::tab {{ padding: 7px 16px; margin-right: 4px; border-radius: 7px; }}
     QTabBar::tab:selected {{ background: {mezclar(ventana, realce, 0.30).name()}; }}
+    /* Atajos de DPI. Hay que dar geometría también al estado normal: en
+       cuanto se estila :checked, ese botón pasa a dibujarse por QSS y los
+       demás siguen con el estilo nativo, y quedan de distinto tamaño. */
+    QPushButton#Nivel {{
+        background: {mezclar(tarjeta_col, texto, 0.10).name()};
+        border: 1px solid {borde};
+        border-radius: 7px;
+        padding: 6px 14px;
+        min-width: 44px;
+    }}
+    QPushButton#Nivel:hover {{
+        border-color: {mezclar(borde_col, realce, 0.55).name()};
+    }}
+    QPushButton#Nivel:checked {{
+        background: {realce.name()};
+        color: {pal.color(QPalette.ColorRole.HighlightedText).name()};
+        border-color: {realce.name()};
+        font-weight: 600;
+    }}
     """
 
 
@@ -147,6 +172,74 @@ class FilaSlider(QWidget):
         self.slider.setValue(round((valor - self._min) / self._paso))
         self.slider.blockSignals(False)
         self.valor.setText(f"{valor:.{self._dec}f}{self._sufijo}")
+
+
+class FilaSliderLista(QWidget):
+    """Etiqueta + slider + valor, pero recorriendo una lista de valores válidos.
+
+    Un paso del deslizador es un valor que el dispositivo admite de verdad, no
+    una fracción de un rango lineal. Importa porque los sensores describen su
+    resolución en tramos de paso creciente: de 100 a 200 van de uno en uno y de
+    32000 a 44000 de 200 en 200. Recorriendo la lista, la precisión cae donde
+    deja de notarse y el recorrido entero sigue siendo manejable.
+    """
+
+    cambiado = Signal(int)
+
+    def __init__(self, etiqueta: str, valores: list[int], sufijo: str = "",
+                 parent=None):
+        super().__init__(parent)
+        self._valores = list(valores)
+        self._sufijo = sufijo
+
+        fila = QHBoxLayout(self)
+        fila.setContentsMargins(0, 0, 0, 0)
+        fila.setSpacing(12)
+
+        self.lbl = QLabel(etiqueta)
+        self.lbl.setMinimumWidth(150)
+        fila.addWidget(self.lbl)
+
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, max(0, len(self._valores) - 1))
+        self.slider.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                  QSizePolicy.Policy.Fixed)
+        fila.addWidget(self.slider, 1)
+
+        self.valor = QLabel("—")
+        self.valor.setMinimumWidth(84)
+        self.valor.setAlignment(Qt.AlignmentFlag.AlignRight |
+                                Qt.AlignmentFlag.AlignVCenter)
+        fuente = QFont(self.valor.font())
+        fuente.setStyleHint(QFont.StyleHint.Monospace)
+        self.valor.setFont(fuente)
+        fila.addWidget(self.valor)
+
+        self.slider.valueChanged.connect(self._al_mover)
+
+    def _indice_de(self, valor: int) -> int:
+        """El índice del valor válido más cercano al pedido."""
+        if not self._valores:
+            return 0
+        return min(range(len(self._valores)),
+                   key=lambda i: abs(self._valores[i] - valor))
+
+    def _al_mover(self, i: int) -> None:
+        if not self._valores:
+            return
+        v = self._valores[i]
+        self.valor.setText(f"{v}{self._sufijo}")
+        self.cambiado.emit(v)
+
+    def poner(self, valor: int) -> None:
+        """Fija el valor sin emitir la señal (para cargar el estado inicial)."""
+        if not self._valores:
+            return
+        i = self._indice_de(valor)
+        self.slider.blockSignals(True)
+        self.slider.setValue(i)
+        self.slider.blockSignals(False)
+        self.valor.setText(f"{self._valores[i]}{self._sufijo}")
 
 
 def pastilla(texto: str) -> QLabel:

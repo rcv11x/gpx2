@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .features import EscrituraIgnorada
 from .profiles import Ajustes, Perfil
 
 
@@ -33,6 +34,10 @@ class Motor:
     def __init__(self, raton):
         self.raton = raton
         self.perfil_activo: str | None = None
+        # Ajustes que este ratón acepta pero no aplica (la tasa de reporte por
+        # receptor, por ejemplo). Se anotan la primera vez para no reintentarlos
+        # cada pocos segundos y llenar el registro de errores repetidos.
+        self.imposibles: set[str] = set()
 
     # -- lectura --------------------------------------------------------------
 
@@ -53,18 +58,48 @@ class Motor:
 
     # -- escritura ------------------------------------------------------------
 
+    def _asegurar_host(self) -> Cambio | None:
+        """Pone el ratón en modo host si no lo está ya.
+
+        Hay que comprobarlo en cada aplicación, no una sola vez: el modo host
+        NO persiste — el ratón vuelve a onboard al dormirse o reconectar. Y
+        mientras mande el perfil interno, el firmware reimpone su propio DPI y
+        su tasa, así que todo lo que escribiéramos se perdería en silencio.
+        """
+        if self.raton.onboard is None:
+            return None
+        try:
+            if self.raton.onboard.es_host():
+                return None
+            cambio = Cambio("modo", "onboard", "host")
+            if not self.raton.asegurar_host():
+                cambio.ok = False
+                cambio.error = "el ratón no aceptó el cambio"
+            return cambio
+        except Exception as e:
+            return Cambio("modo", "onboard", "host", ok=False, error=str(e))
+
     def aplicar(self, perfil: Perfil) -> list[Cambio]:
         """Aplica el perfil y devuelve la lista de cambios efectuados."""
-        actual = self.estado()
         cambios: list[Cambio] = []
+        # Primero el modo: pasar a host puede cambiar lo que el ratón reporta,
+        # así que el estado se lee después.
+        cambio_modo = self._asegurar_host()
+        if cambio_modo is not None:
+            cambios.append(cambio_modo)
+        actual = self.estado()
 
         for ajuste, valor in perfil.ajustes.campos().items():
             previo = getattr(actual, ajuste, None)
-            if previo == valor:
-                continue                       # ya estaba: no se toca
+            if previo == valor or ajuste in self.imposibles:
+                continue                       # ya estaba, o no se puede
             cambio = Cambio(ajuste, previo, valor)
             try:
                 self._escribir(ajuste, valor)
+            except EscrituraIgnorada as e:
+                cambio.ok = False
+                cambio.error = str(e)
+                self.imposibles.add(ajuste)
             except Exception as e:
                 cambio.ok = False
                 cambio.error = str(e)
@@ -72,6 +107,21 @@ class Motor:
 
         self.perfil_activo = perfil.id
         return cambios
+
+    def ha_derivado(self, perfil: Perfil) -> bool:
+        """¿El ratón ha dejado de tener lo que dice el perfil?
+
+        Pasa sin avisar: al despertarse, el ratón vuelve a los ajustes de su
+        perfil interno. No hay ninguna notificación que escuchar, así que la
+        única forma de enterarse es mirar.
+        """
+        actual = self.estado()
+        for ajuste, valor in perfil.ajustes.campos().items():
+            if ajuste in self.imposibles:
+                continue
+            if getattr(actual, ajuste, None) != valor:
+                return True
+        return False
 
     def _escribir(self, ajuste: str, valor) -> None:
         if ajuste == "dpi":

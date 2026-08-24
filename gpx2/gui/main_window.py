@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
@@ -18,9 +18,11 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QHBoxLayout,
 from .. import desktop, firmware
 from ..client import ClienteDemonio
 from ..device import Discovery, Mouse, discover
+from ..hidpp import IDX_DIRECT
 from ..engine import Motor
 from ..profiles import Almacen, Perfil
 from .widgets import (ColumnaCentrada, DelegadoDispositivo, FilaSlider,
+                      FilaSliderLista,
                       ROL_ENCABEZADO, ROL_SUB, Tarjeta, hoja_de_estilo,
                       pastilla)
 
@@ -104,9 +106,10 @@ class PaginaVacia(QWidget):
 # ---------------------------------------------------------------------------
 
 class PaginaRaton(QWidget):
-    def __init__(self, raton: Mouse, parent=None):
+    def __init__(self, raton: Mouse, demo: bool = False, parent=None):
         super().__init__(parent)
         self.raton = raton
+        self.demo = demo
         self.estado = raton.leer_todo()
         self.puntero_kde = desktop.buscar_puntero(raton.node.vid, raton.node.pid)
 
@@ -145,10 +148,33 @@ class PaginaRaton(QWidget):
         lay.addStretch(1)
 
         bat = self.estado.get("battery")
+        self.pastilla_bateria = None
         if bat and bat.percent is not None:
-            icono = "⚡" if bat.charging else "🔋"
-            lay.addWidget(pastilla(f"{icono} {bat.percent}% · {bat.texto}"))
+            self.pastilla_bateria = pastilla(self._texto_bateria(bat))
+            lay.addWidget(self.pastilla_bateria)
         return caja
+
+    @staticmethod
+    def _texto_bateria(bat) -> str:
+        return f"{'⚡' if bat.charging else '🔋'} {bat.percent}% · {bat.texto}"
+
+    def refrescar_bateria(self) -> bool:
+        """Relee la batería y repinta la pastilla. Devuelve si el ratón contestó.
+
+        Es la única lectura que se repite sola: el resto de ajustes no cambian
+        si no los cambia alguien, pero la carga sí. Que devuelva False es la
+        señal de que el ratón ha dejado de responder.
+        """
+        if self.raton.battery is None:
+            return True
+        try:
+            bat = self.raton.battery.get()
+        except Exception:
+            return False
+        self.estado["battery"] = bat
+        if self.pastilla_bateria is not None:
+            self.pastilla_bateria.setText(self._texto_bateria(bat))
+        return True
 
     # -- pestañas -------------------------------------------------------------
 
@@ -157,36 +183,116 @@ class PaginaRaton(QWidget):
 
         dpi = self.estado.get("dpi")
         if dpi:
-            cap = self.raton.dpi
-            t = Tarjeta("DPI del sensor",
-                        f"Resolución física del sensor. Feature 0x{cap.FID:04X} "
-                        f"({cap.CONFIANZA}).")
-            if dpi.valores:
-                # lista discreta: un desplegable es más honesto que un slider
-                combo = QComboBox()
-                for v in dpi.valores:
-                    combo.addItem(f"{v} DPI", v)
-                if dpi.actual in dpi.valores:
-                    combo.setCurrentIndex(dpi.valores.index(dpi.actual))
-                combo.currentIndexChanged.connect(
-                    lambda i, c=combo: self._set_dpi(c.itemData(i)))
-                t.añadir(combo)
-            else:
-                fila = FilaSlider("Resolución", dpi.minimo, dpi.maximo,
-                                  dpi.paso, sufijo=" DPI")
-                fila.poner(dpi.actual)
-                fila.cambiado.connect(lambda v: self._set_dpi(int(v)))
-                t.añadir(fila)
-            t.añadir(QLabel(f"Por defecto del ratón: {dpi.por_defecto} DPI"))
-            tarjetas.append(t)
+            tarjetas.append(self._tarjeta_dpi(dpi))
         else:
             tarjetas.append(Tarjeta(
                 "DPI del sensor",
-                "Este dispositivo no expone ninguna feature de DPI ajustable "
-                "(0x2201 ni 0x2202)."))
+                "Este ratón no permite ajustar el DPI desde el sistema."))
 
         tarjetas.append(self._tarjeta_kde())
         return _columna(*tarjetas)
+
+    def _tarjeta_dpi(self, dpi) -> Tarjeta:
+        cap = self.raton.dpi
+        t = Tarjeta("Sensibilidad del sensor",
+                    "Cuántos puntos por pulgada mide el sensor. A más DPI, más "
+                    "recorre el puntero con el mismo movimiento de la mano.")
+
+        try:
+            validos = cap.valores_validos()
+        except Exception:
+            validos = []
+        try:
+            niveles = cap.niveles()
+        except Exception:
+            niveles = []
+
+        # Atajos: los DPI que el propio ratón guarda en su perfil interno. Son
+        # los que recorre su botón de cambio de DPI, así que el usuario ya los
+        # conoce; poner los nuestros sería inventar.
+        self._botones_dpi = []
+        if niveles:
+            fila = QWidget()
+            lay = QHBoxLayout(fila)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(6)
+            for v in niveles:
+                b = QPushButton(str(v))
+                b.setObjectName("Nivel")
+                b.setCheckable(True)
+                b.setToolTip(f"{v} DPI — nivel guardado en el ratón")
+                b.clicked.connect(lambda _=False, val=v: self._elegir_dpi(val))
+                lay.addWidget(b)
+                self._botones_dpi.append((v, b))
+            lay.addStretch(1)
+            etiqueta = QLabel("Niveles guardados en el ratón")
+            etiqueta.setObjectName("Suave")
+            t.añadir(etiqueta)
+            t.añadir(fila)
+
+        if validos:
+            # Un paso del deslizador = un DPI que el sensor admite de verdad.
+            self._slider_dpi = FilaSliderLista("Resolución", validos,
+                                               sufijo=" DPI")
+            self._slider_dpi.poner(dpi.actual)
+            self._slider_dpi.cambiado.connect(self._set_dpi)
+            t.añadir(self._slider_dpi)
+        else:
+            self._slider_dpi = FilaSlider("Resolución", dpi.minimo, dpi.maximo,
+                                          dpi.paso, sufijo=" DPI")
+            self._slider_dpi.poner(dpi.actual)
+            self._slider_dpi.cambiado.connect(lambda v: self._set_dpi(int(v)))
+            t.añadir(self._slider_dpi)
+
+        pie = QLabel(f"De {dpi.minimo} a {dpi.maximo} DPI · "
+                     f"{len(validos) or '?'} valores admitidos · "
+                     f"de fábrica {dpi.por_defecto} DPI")
+        pie.setObjectName("Suave")
+        t.añadir(pie)
+        self._marcar_nivel(dpi.actual)
+        return t
+
+    def refrescar_ajustes(self) -> None:
+        """Vuelve a leer del ratón lo que se está mostrando.
+
+        Los valores cambian sin que nadie toque estos controles: al aplicar un
+        perfil desde otra pestaña, cuando el demonio cambia de perfil al
+        arrancar un juego, o cuando el ratón se reconecta y vuelve a los suyos.
+        """
+        slider = getattr(self, "_slider_dpi", None)
+        # No pelear con el usuario mientras arrastra.
+        if slider is not None and slider.slider.isSliderDown():
+            return
+
+        if self.raton.dpi is not None:
+            try:
+                dpi = self.raton.dpi.get()
+            except Exception:
+                dpi = None
+            if dpi is not None:
+                self.estado["dpi"] = dpi
+                if slider is not None:
+                    slider.poner(dpi.actual)
+                self._marcar_nivel(dpi.actual)
+
+        self._resincronizar_rate()
+
+        if self.raton.onboard is not None and hasattr(self, "lbl_modo"):
+            try:
+                self.lbl_modo.setText(self.raton.onboard.get())
+            except Exception:
+                pass
+
+    def _marcar_nivel(self, valor: int) -> None:
+        """Deja marcado el atajo que coincide con el DPI puesto, si hay alguno."""
+        for v, b in getattr(self, "_botones_dpi", []):
+            b.setChecked(v == valor)
+
+    def _elegir_dpi(self, valor: int) -> None:
+        """Un atajo: mueve el deslizador y aplica."""
+        if hasattr(self, "_slider_dpi"):
+            self._slider_dpi.poner(valor)
+        self._set_dpi(valor)
 
     def _tarjeta_kde(self) -> Tarjeta:
         t = Tarjeta("Aceleración del escritorio (KDE)",
@@ -213,34 +319,61 @@ class PaginaRaton(QWidget):
         if rate:
             cap = self.raton.rate
             t = Tarjeta("Tasa de reporte",
-                        f"Veces por segundo que el ratón informa de su posición. "
-                        f"Feature 0x{cap.FID:04X} ({cap.CONFIANZA}).")
+                        "Veces por segundo que el ratón informa de dónde está. "
+                        "Más alta significa menos retraso, y algo menos de batería.")
             combo = QComboBox()
             for hz in rate.disponibles:
                 combo.addItem(f"{hz} Hz", hz)
             if rate.actual_hz in rate.disponibles:
                 combo.setCurrentIndex(rate.disponibles.index(rate.actual_hz))
+            # Cada vía admite tasas distintas: por cable este ratón llega a
+            # 1000 Hz y por Lightspeed a 8000. Decirlo evita que parezca que
+            # el programa esconde opciones.
+            otra = rate.otra_conexion
+            if otra and max(otra) != max(rate.disponibles):
+                via = "por cable" if self.raton.index != IDX_DIRECT else "sin cable"
+                t.añadir(QLabel(
+                    f"Por esta conexión tu ratón llega a {max(rate.disponibles)} Hz. "
+                    f"{via.capitalize()} admitiría hasta {max(otra)} Hz."))
             combo.currentIndexChanged.connect(
                 lambda i, c=combo: self._set_rate(c.itemData(i)))
+            self._combo_rate = combo
             t.añadir(combo)
         else:
             t = Tarjeta("Tasa de reporte",
-                        "Este dispositivo no expone las features 0x8060 ni 0x8061.")
+                        "Este ratón no permite ajustar la tasa de reporte.")
 
-        modo = self.estado.get("mode")
         t2 = Tarjeta("Modo de funcionamiento",
-                     "Si manda la memoria interna del ratón (onboard) o el PC (host). "
-                     "Los perfiles por juego necesitan modo host.")
-        t2.añadir(QLabel(modo if modo else "No disponible (feature 0x8090 ausente)."))
+                     "Mientras los perfiles onboard estén activos, el firmware "
+                     "reimpone su DPI y su tasa de reporte, y lo que ajustes aquí "
+                     "no llega a aplicarse. Los perfiles por juego necesitan modo host.")
+        if self.raton.onboard is not None:
+            self.lbl_modo = QLabel(self.estado.get("onboard") or "?")
+            t2.añadir(self.lbl_modo)
+            btn_modo = QPushButton()
+            self._pintar_boton_modo(btn_modo)
+            btn_modo.clicked.connect(lambda: self._toggle_mode(btn_modo))
+            t2.añadir(btn_modo)
+        else:
+            t2.añadir(QLabel(self.estado.get("mode")
+                             or "Este ratón no informa de en qué modo está."))
         return _columna(t, t2)
+
+    def _pintar_boton_modo(self, btn: QPushButton) -> None:
+        try:
+            en_host = self.raton.onboard.es_host()
+        except Exception:
+            btn.setText("Cambiar de modo")
+            return
+        btn.setText("Volver a modo onboard" if en_host else "Cambiar a modo host")
 
     def _tab_botones(self) -> QWidget:
         cap = self.raton.buttons
         if cap is None:
             return _columna(Tarjeta(
                 "Botones reprogramables",
-                "Este ratón no expone la feature 0x1B04, así que no se pueden "
-                "reasignar sus botones."))
+                "Este ratón no permite reasignar sus botones desde el sistema. "
+                "Los configura su propio perfil interno."))
 
         try:
             controles = cap.controls()
@@ -250,7 +383,7 @@ class PaginaRaton(QWidget):
 
         tarjeta = Tarjeta(
             "Botones reprogramables",
-            f"Feature 0x1B04 ({cap.CONFIANZA}). Cada botón sólo puede adoptar "
+            "Cada botón sólo puede adoptar "
             "la función de otros que el firmware permita: por eso el clic "
             "izquierdo casi nunca se puede mover. No es una limitación de este "
             "programa, la impone el ratón.")
@@ -324,15 +457,15 @@ class PaginaRaton(QWidget):
             combo.blockSignals(False)
 
     def _tab_perfiles(self) -> QWidget:
-        return PanelPerfiles(self.raton)
+        return PanelPerfiles(self.raton, demo=self.demo)
 
     def _tab_firmware(self) -> QWidget:
         tarjetas = []
 
         t = Tarjeta("Versiones instaladas",
-                    "Leído del propio ratón con la feature 0x0003.")
+                    "Leído del propio ratón.")
         if self.raton.info is None:
-            t.añadir(QLabel("Este dispositivo no expone la feature 0x0003."))
+            t.añadir(QLabel("Este ratón no informa de su versión de firmware."))
         else:
             try:
                 for f in self.raton.info.firmwares():
@@ -446,16 +579,22 @@ class PaginaRaton(QWidget):
         pruebas = [
             ("0x2202 getSensorCount", 0x2202, 0x00, b""),
             ("0x2202 getSensorCapabilities", 0x2202, 0x01, b"\x00"),
-            ("0x2202 getSensorDpiRanges", 0x2202, 0x02, b"\x00\x00\x00"),
-            ("0x2202 getSensorDpi", 0x2202, 0x03, b"\x00"),
+            ("0x2202 getSensorDpiRanges (pág 0)", 0x2202, 0x02, b"\x00\x00\x00"),
+            ("0x2202 getSensorDpiRanges (pág 1)", 0x2202, 0x02, b"\x00\x00\x01"),
+            ("0x2202 getSensorDpiRanges (pág 2)", 0x2202, 0x02, b"\x00\x00\x02"),
+            ("0x2202 getSensorDpi  f5", 0x2202, 0x05, b"\x00"),
             ("0x2201 getSensorDpiList", 0x2201, 0x01, b"\x00"),
             ("0x2201 getSensorDpi", 0x2201, 0x02, b"\x00"),
-            ("0x8061 getCapabilities (wireless)", 0x8061, 0x00, b"\x00"),
-            ("0x8061 getCapabilities (cable)", 0x8061, 0x00, b"\x01"),
-            ("0x8061 getActualReportRate", 0x8061, 0x01, b""),
+            ("0x8061 capacidades (receptor)", 0x8061, 0x00, b"\x00"),
+            ("0x8061 capacidades (cable)", 0x8061, 0x00, b"\x01"),
+            ("0x8061 getReportRateList  f1", 0x8061, 0x01, b""),
+            ("0x8061 getReportRate  f2", 0x8061, 0x02, b""),
             ("0x8060 getReportRateList", 0x8060, 0x00, b""),
             ("0x8060 getReportRate", 0x8060, 0x01, b""),
             ("0x8090 getModeStatus", 0x8090, 0x00, b""),
+            ("0x8100 getOnboardMode  f2", 0x8100, 0x02, b""),
+            ("0x1004 getBatteryStatus", 0x1004, 0x01, b""),
+            ("0x1004 getBatteryCapability", 0x1004, 0x00, b""),
             ("0x8100 getOnboardProfilesInfo", 0x8100, 0x00, b""),
             ("0x1B04 getCount", 0x1B04, 0x00, b""),
             ("0x1B04 getCidInfo(0)", 0x1B04, 0x01, b"\x00"),
@@ -476,17 +615,78 @@ class PaginaRaton(QWidget):
                 lineas.append(f"{etiqueta:38} ⚠ {e}")
         return "\n".join(lineas)
 
+    def _antes_de_escribir(self) -> None:
+        """El ratón vuelve a onboard al reconectarse, y así rechaza todo."""
+        if self.raton.asegurar_host() and hasattr(self, "lbl_modo"):
+            try:
+                self.lbl_modo.setText(self.raton.onboard.get())
+            except Exception:
+                pass
+
+    def _explicar(self, e: Exception) -> str:
+        """Traduce el error del ratón a algo accionable."""
+        from gpx2.hidpp import HidppError
+        if isinstance(e, HidppError) and e.code == 0x05:
+            return ("El ratón rechazó el cambio. Suele pasar cuando mandan sus "
+                    "perfiles internos: prueba «Cambiar a modo host» en la "
+                    "pestaña Rendimiento.")
+        return str(e)
+
     def _set_dpi(self, valor: int) -> None:
         try:
+            self._antes_de_escribir()
             self.raton.dpi.set(int(valor))
+            self._marcar_nivel(int(valor))
         except Exception as e:
-            QMessageBox.warning(self, "No se pudo cambiar el DPI", str(e))
+            QMessageBox.warning(self, "No se pudo cambiar el DPI",
+                                self._explicar(e))
 
     def _set_rate(self, hz: int) -> None:
+        from gpx2.features import EscrituraIgnorada
         try:
+            self._antes_de_escribir()
             self.raton.rate.set(int(hz))
+        except EscrituraIgnorada as e:
+            # El ratón no ha cambiado: dejar el desplegable donde estaba, o
+            # estaríamos enseñando un valor que el dispositivo no tiene.
+            QMessageBox.information(
+                self, "El ratón no aplicó la tasa",
+                f"{e}\n\nNo es un fallo de comunicación: la orden llegó y el "
+                "ratón la aceptó, pero mantiene su tasa.")
+            self._resincronizar_rate()
         except Exception as e:
-            QMessageBox.warning(self, "No se pudo cambiar la tasa de reporte", str(e))
+            QMessageBox.warning(self, "No se pudo cambiar la tasa de reporte",
+                                self._explicar(e))
+            self._resincronizar_rate()
+
+    def _resincronizar_rate(self) -> None:
+        """Devuelve el desplegable a lo que el ratón dice de verdad."""
+        combo = getattr(self, "_combo_rate", None)
+        if combo is None:
+            return
+        try:
+            real = self.raton.rate.get().actual_hz
+        except Exception:
+            return
+        for i in range(combo.count()):
+            if combo.itemData(i) == real:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(i)
+                combo.blockSignals(False)
+                return
+
+    def _toggle_mode(self, btn: QPushButton) -> None:
+        try:
+            quiero_host = not self.raton.onboard.es_host()
+            if not self.raton.onboard.set_host(quiero_host):
+                QMessageBox.warning(
+                    self, "El ratón no aceptó el cambio",
+                    "El dispositivo sigue en el modo anterior.")
+            self._pintar_boton_modo(btn)
+            if hasattr(self, "lbl_modo"):
+                self.lbl_modo.setText(self.raton.onboard.get())
+        except Exception as e:
+            QMessageBox.warning(self, "No se pudo cambiar el modo", str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -569,12 +769,12 @@ class PanelPerfiles(QWidget):
     TOML del disco, así que no hay dos verdades.
     """
 
-    def __init__(self, raton: Mouse, parent=None):
+    def __init__(self, raton: Mouse, demo: bool = False, parent=None):
         super().__init__(parent)
         self.raton = raton
         self.motor = Motor(raton)
         self.cliente = ClienteDemonio()
-        self.almacen = Almacen()
+        self.almacen = Almacen(demo=demo)
 
         raiz = QVBoxLayout(self)
         raiz.setContentsMargins(18, 18, 18, 18)
@@ -587,6 +787,7 @@ class PanelPerfiles(QWidget):
         raiz.addWidget(self.aviso)
 
         tarjeta = Tarjeta("Perfiles",
+                          "Selecciona uno y pulsa Aplicar, o haz doble clic. "
                           "Cada perfil es un fichero TOML en "
                           f"{self.almacen.dir}, editable a mano.")
         self.lista = QListWidget()
@@ -667,8 +868,17 @@ class PanelPerfiles(QWidget):
 
     # -- acciones -------------------------------------------------------------
 
+    def _pagina_raton(self):
+        """La página de ratón que contiene este panel, si la hay."""
+        w = self.parent()
+        while w is not None and not isinstance(w, PaginaRaton):
+            w = w.parent()
+        return w
+
     def _aplicar(self) -> None:
-        perfil = self._seleccionado()
+        self._aplicar_perfil(self._seleccionado())
+
+    def _aplicar_perfil(self, perfil) -> None:
         if perfil is None:
             return
         if self.cliente.activo:
@@ -681,6 +891,10 @@ class PanelPerfiles(QWidget):
         else:
             cambios = [str(c) for c in self.motor.aplicar(perfil)]
         self.refrescar()
+        # Los controles de las otras pestañas siguen enseñando lo de antes.
+        pagina = self._pagina_raton()
+        if pagina is not None:
+            pagina.refrescar_ajustes()
         self.window().statusBar().showMessage(
             f"{perfil.nombre}: " + ("; ".join(cambios) if cambios else "ya estaba aplicado"),
             6000)
@@ -717,7 +931,9 @@ class PanelPerfiles(QWidget):
         if perfil is None:
             return
         self.almacen.marcar_por_defecto(perfil.id)
-        self.refrescar()
+        # Marcarlo por defecto y que no pase nada desconcierta: el perfil por
+        # defecto es "lo que quiero tener puesto", así que se aplica también.
+        self._aplicar_perfil(perfil)
 
     def _borrar(self) -> None:
         perfil = self._seleccionado()
@@ -793,12 +1009,109 @@ class VentanaPrincipal(QMainWindow):
         self.btn_lateral.clicked.connect(self._alternar_lateral)
         self.statusBar().addPermanentWidget(self.btn_lateral)
         self.statusBar().showMessage("Listo")
+
+        # Vigilancia de conexiones. Sin dependencias añadidas: mirar qué nodos
+        # /dev/hidraw* hay es un listado de directorio, y cambia en cuanto se
+        # enciende o se apaga un dispositivo. Un udev real necesitaría pyudev.
+        self._firma_nodos: tuple = ()
+        self._ciclos = 0
+        self._escaneando = False
+        self._vigilante = QTimer(self)
+        self._vigilante.setInterval(800)
+        self._vigilante.timeout.connect(self._vigilar)
+        self._vigilante.start()
+
+        # Al enchufar el receptor, el nodo aparece antes de que el ratón
+        # conteste por HID++. Si escaneáramos al instante, no lo veríamos como
+        # ratón HID++ y acabaría en la lista de punteros genéricos. Esperar
+        # también agrupa la ráfaga de nodos que crea un solo receptor.
+        self._rescan = QTimer(self)
+        self._rescan.setSingleShot(True)
+        self._rescan.setInterval(700)
+        self._rescan.timeout.connect(self.escanear)
+
         QTimer.singleShot(0, self.escanear)
+
+    # -- vigilancia -----------------------------------------------------------
+
+    @staticmethod
+    def _firma() -> tuple:
+        from glob import glob
+        return tuple(sorted(glob("/dev/hidraw*")))
+
+    def _vigilar(self) -> None:
+        if self._escaneando:
+            return
+        firma = self._firma()
+        if firma != self._firma_nodos:
+            self._firma_nodos = firma
+            self.statusBar().showMessage("Ha cambiado un dispositivo…")
+            self._rescan.start()          # reinicia la espera si llegan más
+            return
+
+        # Cada 5 ciclos (4 s) se relee la batería del ratón que se está viendo.
+        # Además de mantener el porcentaje al día, es la única forma de notar
+        # que el ratón se ha apagado con su interruptor: eso no quita ningún
+        # nodo del sistema, así que la vigilancia de arriba no lo ve. No se
+        # puede escuchar la notificación que manda el ratón porque el canal se
+        # abre sólo durante cada petición, y eso es a propósito.
+        self._ciclos += 1
+        if self._ciclos % 5:
+            return
+        pagina = self.pila.currentWidget()
+        if isinstance(pagina, PaginaRaton):
+            if not pagina.refrescar_bateria():
+                self.escanear()
+                return
+            # El demonio puede haber cambiado de perfil, o el ratón haber
+            # vuelto a los suyos al despertarse: que se vea.
+            pagina.refrescar_ajustes()
+            return
+
+        # Sin ningún ratón HID++ a la vista. Hay que seguir mirando: encender
+        # el ratón con su interruptor no crea ningún nodo, y al enchufar el
+        # receptor el nodo aparece antes de que el enlace esté listo, así que
+        # el escaneo de hace un momento pudo llegar demasiado pronto. Sin este
+        # reintento habría que pulsar "Volver a escanear" a mano.
+        if not (self.hallazgo and self.hallazgo.ratones) and self._hay_logitech():
+            self.escanear()
+
+    @staticmethod
+    def _hay_logitech() -> bool:
+        """¿Hay algún nodo Logitech con canal HID++? Mirar sysfs, sin hablar
+        con el dispositivo: así el reintento no cuesta nada cuando no hay nada
+        que encontrar."""
+        from ..transport import enumerate_nodes
+        try:
+            return any(n.hidpp and n.is_logitech for n in enumerate_nodes())
+        except Exception:
+            return False
 
     # -- escaneo --------------------------------------------------------------
 
     def escanear(self) -> None:
+        # `processEvents` de más abajo deja correr el temporizador de
+        # vigilancia, que llamaría aquí otra vez y se llevaría por delante los
+        # objetos que este escaneo está construyendo.
+        if self._escaneando:
+            return
+        self._escaneando = True
+        try:
+            self._escanear()
+        finally:
+            self._escaneando = False
+
+    def _escanear(self) -> None:
         self.statusBar().showMessage("Buscando dispositivos…")
+
+        # Tras un reescaneo hay páginas nuevas: sin esto, la selección salta al
+        # primer dispositivo cada vez que alguien enciende un teclado.
+        anterior = None
+        item = self.lista.currentItem()
+        if item is not None:
+            anterior = item.data(ROL_SUB)
+        ids_antes = {m.id_str for m in self.hallazgo.ratones} if self.hallazgo else set()
+        self._firma_nodos = self._firma()
         QApplication.processEvents()
 
         if self.hallazgo:
@@ -814,13 +1127,24 @@ class VentanaPrincipal(QMainWindow):
             self.hallazgo.ratones.append(raton_simulado())
 
         # Los ratones HID++ ya tienen su propia entrada; no los repetimos abajo.
+        # Hace falta comparar también por nombre: por receptor, HID++ ve el
+        # VID:PID del receptor y KWin el del ratón emparejado, y no coinciden.
         ids_hidpp = {(m.node.vid, m.node.pid) for m in self.hallazgo.ratones}
+        nombres_hidpp = [m.nombre for m in self.hallazgo.ratones]
+
+        def ya_esta_arriba(info) -> bool:
+            if (info.vid, info.pid) in ids_hidpp:
+                return True
+            return any(desktop.mismo_aparato(n, info.nombre)
+                       for n in nombres_hidpp)
+
         candidatos = [(p, p.info()) for p in punteros]
         otros = [p for p, i in candidatos
-                 if (i.vid, i.pid) not in ids_hidpp
+                 if not ya_esta_arriba(i)
                  and i.soporta_aceleracion and not i.es_de_teclado]
         teclados = [p for p, i in candidatos
-                    if i.soporta_aceleracion and i.es_de_teclado]
+                    if not ya_esta_arriba(i)
+                    and i.soporta_aceleracion and i.es_de_teclado]
 
         self.lista.clear()
         while self.pila.count() > 1:
@@ -831,7 +1155,7 @@ class VentanaPrincipal(QMainWindow):
         if self.hallazgo.ratones:
             self._encabezado("Compatibles")
             for raton in self.hallazgo.ratones:
-                pagina = PaginaRaton(raton)
+                pagina = PaginaRaton(raton, demo=self.demo)
                 self.pila.addWidget(pagina)
                 self._entrada(raton.nombre, raton.id_str, pagina)
 
@@ -853,15 +1177,57 @@ class VentanaPrincipal(QMainWindow):
 
         self._actualizar_vacio()
         if self.lista.count():
+            # Volver al mismo dispositivo que estaba seleccionado; si ya no
+            # está (lo han desconectado), al primero que sirva.
+            fila = None
             for i in range(self.lista.count()):
-                if self.lista.item(i).data(ROL_DATOS) is not None:
-                    self.lista.setCurrentRow(i)
+                item = self.lista.item(i)
+                if item.data(ROL_DATOS) is None:
+                    continue
+                if fila is None:
+                    fila = i
+                if anterior is not None and item.data(ROL_SUB) == anterior:
+                    fila = i
                     break
+            if fila is not None:
+                self.lista.setCurrentRow(fila)
+        self._reaplicar_por_defecto(ids_antes)
         self.statusBar().showMessage(
             f"{len(self.hallazgo.ratones)} ratón(es) HID++ · "
             f"{len(otros)} puntero(s) genérico(s) · "
             f"{len(teclados)} teclado(s) con emulación · "
             f"{len(self.hallazgo.sin_permiso)} sin permiso")
+
+    def _reaplicar_por_defecto(self, ids_antes: set[str]) -> None:
+        """Reaplica el perfil por defecto a los ratones que acaban de volver.
+
+        En modo host el ratón NO guarda nada: al apagarlo y encenderlo vuelve a
+        los valores de su perfil interno. Es el mismo trabajo que hace el
+        demonio cuando detecta una conexión; aquí sirve para quien use sólo la
+        interfaz. Se hace también al arrancar: marcar un perfil "por defecto" es
+        decir "esto es lo que quiero tener puesto", así que abrir el programa y
+        encontrarse otra cosa desconcierta.
+        """
+        vuelven = [m for m in self.hallazgo.ratones if m.id_str not in ids_antes]
+        if not vuelven:
+            return
+        try:
+            almacen = Almacen(demo=self.demo)
+            almacen.cargar()
+            perfil = almacen.por_defecto()
+        except Exception:
+            return
+        if perfil is None:
+            return
+        for raton in vuelven:
+            try:
+                if Motor(raton).aplicar(perfil):
+                    self.statusBar().showMessage(
+                        f"«{perfil.nombre}» reaplicado a {raton.nombre} "
+                        "tras reconectarse")
+                    QApplication.processEvents()
+            except Exception:
+                continue
 
     def _encabezado(self, texto: str) -> None:
         item = QListWidgetItem(texto)
@@ -924,6 +1290,16 @@ def _icono() -> QIcon:
         return icono
     local = Path(__file__).resolve().parents[2] / "data" / "gpx2.svg"
     return QIcon(str(local)) if local.exists() else QIcon()
+
+
+def _qt_msg_handler(mode, _ctx, message):
+    import sys
+    # El splitter de XCB intenta capturar el ratón y Qt avisa; es inofensivo.
+    if "grabbing the mouse only for popup" in message:
+        return
+    print(message, file=sys.stderr)
+
+qInstallMessageHandler(_qt_msg_handler)
 
 
 def main(demo: bool = False) -> int:

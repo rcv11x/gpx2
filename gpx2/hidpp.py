@@ -26,11 +26,20 @@ LEN = {SHORT: 7, LONG: 20, VERY_LONG: 64}
 IDX_DIRECT = 0xFF          # el propio ratón (USB, o expuesto por el kernel)
 IDX_RECEIVER = range(1, 7)  # ratones emparejados detrás de un receptor
 
+# Códigos de error de HID++ 2.0. La tabla anterior estaba desplazada y daba
+# diagnósticos falsos: lo que llamaba "fuera de rango" era en realidad
+# "parámetro inválido", y el 0x05 no tiene nada que ver con las features.
 ERRORS = {
-    0x00: "sin error", 0x01: "parámetro inválido", 0x02: "fuera de rango",
-    0x03: "batería crítica", 0x04: "función inválida", 0x05: "feature inválida",
-    0x06: "sin permiso", 0x07: "índice de feature inválido",
-    0x08: "solicitud inválida", 0x09: "no soportado",
+    0x00: "sin error",
+    0x01: "error desconocido",
+    0x02: "parámetro inválido",
+    0x03: "fuera de rango",
+    0x04: "error de hardware",
+    0x05: "error interno del dispositivo",
+    0x06: "índice de feature inválido",
+    0x07: "función inválida",
+    0x08: "ocupado",
+    0x09: "no soportado",
 }
 
 # Catálogo de features. Sirve para poner nombre a lo que el ratón reporte;
@@ -126,7 +135,7 @@ class Hidpp:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise NoResponse(
-                    f"feature idx {feature_index}, función {function}: sin respuesta")
+                    f"feature idx {feature_index}, función {head[3] >> 4}: sin respuesta")
             data = self.ch.read(left)
             if data is None or len(data) < 6 or data[1] != self.index:
                 continue

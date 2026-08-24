@@ -17,7 +17,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .hidpp import Hidpp, HidppError, NoResponse
+from .hidpp import IDX_DIRECT, Hidpp, HidppError, NoResponse
+
+
+class EscrituraIgnorada(Exception):
+    """El ratón contestó "sin error" pero el valor no cambió.
+
+    No es un fallo de comunicación: el paquete llegó y el dispositivo lo
+    aceptó. Simplemente decidió no aplicarlo — pasa cuando manda el perfil
+    onboard, o cuando el enlace inalámbrico fija el ajuste. Merece un tipo
+    propio porque la respuesta del programa es distinta a la de un error de
+    protocolo: no hay nada que reintentar, hay algo que explicarle al usuario.
+    """
 
 
 class Capability:
@@ -137,55 +148,149 @@ class AdjustableDpi(Capability):
                        max(valores) if valores else actual,
                        paso or 50, valores)
 
+    def valores_validos(self, sensor: int = 0) -> list[int]:
+        return self._lista(sensor)[0]
+
+    def niveles(self, sensor: int = 0) -> list[int]:
+        """0x2201 no expone niveles predefinidos."""
+        return []
+
     def set(self, dpi: int, sensor: int = 0) -> int:
         r = self.call(0x03, bytes([sensor]) + dpi.to_bytes(2, "big"))
         return int.from_bytes(r[1:3], "big")
 
 
 class ExtendedDpi(Capability):
-    """Feature 0x2202: el modelo nuevo (el que probablemente use el SL2).
+    """Feature 0x2202: el modelo nuevo, el que usa el PRO X 2.
 
-    OJO: el decodificador está razonado a partir de la documentación pero SIN
-    validar contra hardware. La pestaña Diagnóstico vuelca la respuesta cruda
-    para poder ajustarlo.
+    Los números de función están contrastados con la implementación de Solaar
+    (`settings_templates.ExtendedAdjustableDpi`), que sí está probada contra
+    hardware:  leer = función 5, escribir = función 6.  La versión anterior de
+    esta clase usaba la 3 y la 4, que son *lecturas*: por eso escribir el DPI
+    no daba error y tampoco hacía nada.
     """
-    FID, TITULO, CONFIANZA = 0x2202, "DPI", "por validar"
-    DIR_X = 0
+    FID, TITULO, CONFIANZA = 0x2202, "DPI", "verificada"
+
+    F_CAPS, F_RANGOS, F_NIVELES, F_LEER, F_ESCRIBIR = 0x01, 0x02, 0x03, 0x05, 0x06
+    DIR_X, DIR_Y = 0, 1
+
+    def __init__(self, hpp):
+        super().__init__(hpp)
+        self._cache_lista: dict[int, list[int]] = {}
 
     def sensor_count(self) -> int:
         return self.call(0x00)[0]
 
-    def raw_ranges(self, sensor: int = 0) -> bytes:
-        return self.call(0x02, bytes([sensor, self.DIR_X, 0]))
+    def capacidades(self, sensor: int = 0) -> tuple[bool, bool]:
+        """(¿eje Y independiente?, ¿distancia de despegue ajustable?)"""
+        r = self.call(self.F_CAPS, bytes([sensor]))
+        return bool(r[2] & 0x01), bool(r[2] & 0x02)
 
     def raw_current(self, sensor: int = 0) -> bytes:
-        return self.call(0x03, bytes([sensor]))
+        return self.call(self.F_LEER, bytes([sensor]))
+
+    def _lista(self, sensor: int = 0, direccion: int = 0) -> list[int]:
+        """Lista de DPIs válidos, reconstruida de las páginas de 0x2202 f2.
+
+        La respuesta NO es autocontenida: cada página aporta 13 bytes al mismo
+        flujo, y un valor se puede partir entre dos páginas. Se van pidiendo
+        páginas consecutivas hasta que el flujo acaba en 0x0000.
+
+        En el flujo, un valor con los tres bits altos a 1 no es un DPI: es el
+        *paso*, y el valor que le sigue es el final del tramo. Así el ratón
+        describe "de 100 a 200 de uno en uno, de 200 a 500 de dos en dos…".
+        """
+        if sensor in self._cache_lista and direccion == 0:
+            return self._cache_lista[sensor]    # el sensor no cambia de rangos
+
+        datos = b""
+        for pagina in range(8):                 # tope de seguridad
+            r = self.call(self.F_RANGOS, bytes([sensor, direccion, pagina]))
+            datos += r[3:]                      # [0..2] son eco de la petición
+            if datos[-2:] == b"\x00\x00":
+                break
+
+        valores: list[int] = []
+        i = 0
+        while i + 1 < len(datos):
+            v = int.from_bytes(datos[i:i + 2], "big")
+            if v == 0:
+                break
+            if (v >> 13) == 0b111:
+                paso = v & 0x1FFF
+                hasta = int.from_bytes(datos[i + 2:i + 4], "big")
+                if valores and paso and hasta > valores[-1]:
+                    valores += list(range(valores[-1] + paso, hasta + 1, paso))
+                i += 4
+            else:
+                valores.append(v)
+                i += 2
+        if direccion == 0:
+            self._cache_lista[sensor] = valores
+        return valores
+
+    def valores_validos(self, sensor: int = 0) -> list[int]:
+        return self._lista(sensor)
+
+    def niveles(self, sensor: int = 0) -> list[int]:
+        """Los DPI que el ratón guarda en su perfil interno.
+
+        Son los que recorre el botón de cambio de DPI del propio ratón, así que
+        sirven de atajo: es lo que el usuario ya conoce de su dispositivo.
+        """
+        r = self.call(self.F_NIVELES, bytes([sensor]))
+        niveles = []
+        for i in range(2, len(r) - 1, 2):
+            v = int.from_bytes(r[i:i + 2], "big")
+            if v == 0:
+                break
+            niveles.append(v)
+        return niveles
 
     def get(self, sensor: int = 0) -> DpiInfo:
         r = self.raw_current(sensor)
-        actual = int.from_bytes(r[1:3], "big")
-        defecto = actual
-        # La lista de rangos usa el mismo truco 0xE000 que 0x2201.
-        raw = self.raw_ranges(sensor)
-        valores, paso = [], 0
-        for i in range(3, len(raw) - 1, 2):
-            v = int.from_bytes(raw[i:i + 2], "big")
-            if v == 0:
-                break
-            if (v & 0xE000) == 0xE000:
-                paso = v & 0x1FFF
-            else:
-                valores.append(v)
-        if paso and len(valores) >= 2:
-            return DpiInfo(actual, defecto, min(valores), max(valores), paso, [])
-        return DpiInfo(actual, defecto,
-                       min(valores) if valores else actual,
-                       max(valores) if valores else actual,
-                       paso or 50, valores)
+        # [0]=sensor [1:3]=DPI X [3:5]=X por defecto [5:7]=DPI Y [7:9]=Y por
+        # defecto [9]=distancia de despegue. Un 0 en el actual significa
+        # "estoy usando el de fábrica".
+        actual = int.from_bytes(r[1:3], "big") or int.from_bytes(r[3:5], "big")
+        defecto = int.from_bytes(r[3:5], "big") or actual
+
+        valores = self._lista(sensor)
+        if not valores:
+            return DpiInfo(actual, defecto, actual, actual, 50, [])
+
+        minimo, maximo = min(valores), max(valores)
+        pasos = {b - a for a, b in zip(valores, valores[1:])}
+        paso = min(pasos) if pasos else 50
+        # Una lista larga es en realidad un rango continuo: al panel le
+        # conviene un deslizador, no un desplegable de cientos de entradas.
+        discretos = valores if len(valores) <= 24 else []
+        return DpiInfo(actual, defecto, minimo, maximo, paso, discretos)
 
     def set(self, dpi: int, sensor: int = 0) -> int:
-        self.call(0x04, bytes([sensor, self.DIR_X]) + dpi.to_bytes(2, "big") + b"\x00")
-        return self.get(sensor).actual
+        """Escribe el DPI. Ajusta al valor válido más cercano si hace falta."""
+        validos = self._lista(sensor)
+        if validos:
+            dpi = min(validos, key=lambda v: abs(v - dpi))
+
+        tiene_y, tiene_lod = self.capacidades(sensor)
+        actual = self.raw_current(sensor)
+
+        payload = bytes([sensor]) + dpi.to_bytes(2, "big")
+        # Con eje Y independiente hay que mandarlo también: si no, el ratón
+        # quedaría con distinta sensibilidad en horizontal y en vertical.
+        payload += dpi.to_bytes(2, "big") if tiene_y else b"\x00\x00"
+        # La distancia de despegue no es cosa nuestra: se reenvía tal cual.
+        payload += bytes([actual[9] if tiene_lod and len(actual) > 9 else 0])
+
+        self.call(self.F_ESCRIBIR, payload)
+        leido = self.get(sensor).actual
+        if leido != dpi:
+            raise EscrituraIgnorada(
+                f"el ratón aceptó la orden pero sigue en {leido} DPI. "
+                "Suele significar que manda su perfil interno: prueba a "
+                "pasarlo a modo host.")
+        return leido
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +300,8 @@ class ExtendedDpi(Capability):
 @dataclass
 class RateInfo:
     actual_hz: int
-    disponibles: list[int]
+    disponibles: list[int]              # las que admite la conexión de ahora
+    otra_conexion: list[int] | None = None   # las de la otra vía, informativo
 
 
 class ReportRate(Capability):
@@ -216,30 +322,75 @@ class ReportRate(Capability):
 class ExtendedReportRate(Capability):
     """Feature 0x8061: el modelo nuevo, necesario para 2K/4K/8K.
 
-    Igual que 0x2202: implementado a partir de la documentación, pendiente de
-    validar con el ratón real. El mapeo de bits a Hz es la parte a confirmar.
+    Números de función contrastados con Solaar: 1 = lista, 2 = leer, 3 =
+    escribir. Antes leíamos la tasa actual de la función 1, que devuelve el
+    bitmap de la lista: el primer byte es 0x00 y se interpretaba como índice 0,
+    o sea 125 Hz, dijera lo que dijera el ratón.
     """
     FID, TITULO, CONFIANZA = 0x8061, "Tasa de reporte", "por validar"
-    WIRELESS, WIRED = 0, 1
-    # Hipótesis de mapeo: bit n -> este Hz. Se corrige en cuanto veamos el
-    # bitmap real junto a lo que muestra G HUB.
+
+    F_CAPS_CONEXION, F_LISTA, F_LEER, F_ESCRIBIR = 0x00, 0x01, 0x02, 0x03
+    # Comprobado con el PRO X 2 por cable y por receptor: el parámetro 0 es el
+    # cable y el 1 el inalámbrico, no al revés como teníamos. En este ratón el
+    # cable llega a 1000 Hz y el enlace inalámbrico a 8000 — los 8K son una
+    # capacidad del Lightspeed, no del USB.
+    WIRED, WIRELESS = 0, 1
+    # Índice -> Hz. El ratón habla de periodos (8ms, 4ms… 125us); esta es la
+    # misma tabla que usa Solaar, traducida a frecuencia.
     MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
 
-    def raw_capabilities(self, conexion: int = WIRELESS) -> bytes:
-        return self.call(0x00, bytes([conexion]))
+    def _conexion_actual(self) -> int:
+        """Por cable y por receptor el ratón admite tasas distintas."""
+        return self.WIRED if self.hpp.index == IDX_DIRECT else self.WIRELESS
 
-    def get(self, conexion: int = WIRELESS) -> RateInfo:
-        raw = self.raw_capabilities(conexion)
-        bitmap = int.from_bytes(raw[0:2], "big")
-        hz = [self.MAPEO_HZ[n] for n in range(len(self.MAPEO_HZ))
-              if bitmap & (1 << n)]
-        idx = self.call(0x01)[0]
+    def raw_capabilities(self, conexion: int) -> bytes:
+        return self.call(self.F_CAPS_CONEXION, bytes([conexion]))
+
+    def _hz_de_bitmap(self, bitmap: int) -> list[int]:
+        return [self.MAPEO_HZ[n] for n in range(len(self.MAPEO_HZ))
+                if bitmap & (1 << n)]
+
+    def get(self, conexion: int | None = None) -> RateInfo:
+        """Lo que admite la conexión de ahora, y lo que daría la otra.
+
+        La lista que manda es la de la función 1: cambia según por dónde esté
+        conectado el ratón, y es la que decide qué acepta la escritura. Por
+        cable devuelve 0x0f, y escribir 8000 Hz responde "parámetro inválido";
+        por receptor devuelve 0x7f y los acepta.
+
+        La función 0 informa de cada vía por separado, y sirve para poder decir
+        "de forma inalámbrica llegarías a 8000".
+        """
+        bitmap = int.from_bytes(self.call(self.F_LISTA)[0:2], "big")
+        aqui = sorted(self._hz_de_bitmap(bitmap), reverse=True)
+
+        if conexion is None:
+            conexion = self._conexion_actual()
+        try:
+            otra = self.WIRELESS if conexion == self.WIRED else self.WIRED
+            mapa = int.from_bytes(self.raw_capabilities(otra)[0:2], "big")
+            alla = sorted(self._hz_de_bitmap(mapa), reverse=True)
+        except (HidppError, NoResponse, OSError):
+            alla = None
+
+        idx = self.call(self.F_LEER)[0]
         actual = self.MAPEO_HZ[idx] if idx < len(self.MAPEO_HZ) else 0
-        return RateInfo(actual, sorted(hz, reverse=True))
+        return RateInfo(actual, aqui, alla)
 
-    def set(self, hz: int, conexion: int = WIRELESS) -> None:
+    def set(self, hz: int) -> None:
         idx = self.MAPEO_HZ.index(hz)
-        self.call(0x02, bytes([conexion, idx]))
+        self.call(self.F_ESCRIBIR, bytes([idx]))
+        # Comprobado en un PRO X 2: por receptor contesta "sin error" y no
+        # cambia nada, y a Solaar le pasa lo mismo. Si no releyéramos, la
+        # interfaz se quedaría mostrando un valor que el ratón no tiene.
+        leido = self.call(self.F_LEER)[0]
+        if leido != idx:
+            actual = self.MAPEO_HZ[leido] if leido < len(self.MAPEO_HZ) else "?"
+            raise EscrituraIgnorada(
+                f"el ratón aceptó la orden pero sigue a {actual} Hz. "
+                "Por receptor no hemos conseguido cambiarla con ningún formato, "
+                "y a Solaar le pasa lo mismo; por cable sí funciona, pero ahí el "
+                "ratón sólo llega a 1000 Hz.")
 
 
 # ---------------------------------------------------------------------------
@@ -247,12 +398,48 @@ class ExtendedReportRate(Capability):
 # ---------------------------------------------------------------------------
 
 class ModeStatus(Capability):
-    """Feature 0x8090. Dice si manda la memoria del ratón o manda el PC."""
+    """Feature 0x8090. Informativa: dice si manda el ratón o manda el PC.
+
+    Su función de escritura devuelve "fuera de rango" en el PRO X 2, así que
+    para *cambiar* de modo se usa OnboardProfiles (0x8100), que es lo que hace
+    Solaar. Aquí sólo leemos.
+    """
     FID, TITULO, CONFIANZA = 0x8090, "Modo de funcionamiento", "por validar"
 
     def get(self) -> str:
         r = self.call(0x00)
         return "host (manda el PC)" if r[0] & 0x01 else "onboard (manda el ratón)"
+
+
+class OnboardProfiles(Capability):
+    """Feature 0x8100. Es la que de verdad decide quién manda.
+
+    Mientras los perfiles onboard estén activos, el firmware reimpone su propio
+    DPI y su propia tasa de reporte, y lo que escribamos por 0x2202 se pierde.
+    Los valores (0x01 activar, 0x02 desactivar) y los números de función salen
+    de la implementación de Solaar, probada contra hardware.
+    """
+    FID, TITULO, CONFIANZA = 0x8100, "Perfiles onboard", "verificada"
+
+    F_ESCRIBIR_MODO, F_LEER_MODO = 0x01, 0x02
+    ONBOARD, HOST = 0x01, 0x02
+
+    def info(self) -> bytes:
+        return self.call(0x00)
+
+    def modo(self) -> int:
+        return self.call(self.F_LEER_MODO)[0]
+
+    def es_host(self) -> bool:
+        return self.modo() != self.ONBOARD
+
+    def set_host(self, host: bool = True) -> bool:
+        """Pasa a modo host (o vuelve a onboard). Devuelve si quedó como se pidió."""
+        self.call(self.F_ESCRIBIR_MODO, bytes([self.HOST if host else self.ONBOARD]))
+        return self.es_host() == host
+
+    def get(self) -> str:
+        return "host (manda el PC)" if self.es_host() else "onboard (manda el ratón)"
 
 
 # ---------------------------------------------------------------------------

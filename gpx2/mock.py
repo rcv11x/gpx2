@@ -31,10 +31,27 @@ TABLA = [
 TIPOS = {0x0001: 0x00, 0x0003: 0x00, 0x00C2: 0x20, 0x1802: 0x20, 0x8111: 0x20}
 VERSIONES = {0x0005: 1, 0x1004: 0, 0x1B04: 5, 0x2202: 2, 0x8061: 0, 0x8100: 1}
 
-DPI_ACTUAL = 1600
-DPI_MIN, DPI_MAX, DPI_PASO = 100, 32000, 50
-HZ_INDICE = 4                      # posición en ExtendedReportRate.MAPEO_HZ
-BATERIA = (78, 3, 0, 0)            # porcentaje, nivel, estado, alimentación
+DPI_ACTUAL, DPI_DEFECTO, LOD = 800, 800, 0x02
+
+# Páginas de getSensorDpiRanges (0x2202 f2), copiadas literalmente del
+# PRO X 2 (volcado 2026-08-24). Cada página aporta 13 bytes al MISMO flujo:
+# un valor puede quedar partido entre dos, por eso la página 0 acaba en 0x03
+# y la 1 empieza en 0xe8 (juntos, 0x03E8 = 1000).
+# El flujo describe: 100 · paso 1 →200 · paso 2 →500 · paso 5 →1000 ·
+# paso 10 →2000 · paso 20 →5000 · paso 50 →10000 · paso 100 →20000 ·
+# paso 125 →32000 · paso 200 →44000.
+RANGOS_PAGINAS = [
+    bytes.fromhex("0064 e001 00c8 e002 01f4 e005 03".replace(" ", "")),
+    bytes.fromhex("e8 e00a 07d0 e014 1388 e032 2710".replace(" ", "")),
+    bytes.fromhex("e064 4e20 e07d 7d00 e0c8 abe0 00".replace(" ", "")),
+    bytes(13),
+]
+
+# Los cinco DPI del perfil onboard y su distancia de despegue (0x2202 f3 y f4).
+DPI_NIVELES = [800, 1200, 1600, 2400, 3200]
+
+HZ_INDICE = 3                      # índice 3 = 1000 Hz (tope por receptor)
+BATERIA = (78, 8, 0, 0)            # volcado real: 78%, nivel 8 (lleno)
 
 # Botones que declararía el ratón: (cid, task_id, flags, pos, group, gmask)
 #   flags 0x01 botón de ratón | 0x10 reprogramable | 0x20 divertible
@@ -55,9 +72,11 @@ class CanalSimulado:
     def __init__(self):
         self.cola: list[bytes] = []
         self.dpi = DPI_ACTUAL
+        self.lod = LOD
         self.hz_idx = HZ_INDICE
         self.indices = {fid: i for i, fid in enumerate(TABLA)}
         self.remapeos: dict[int, int] = {}
+        self.modo_onboard = 0x01        # arranca en onboard, como el real
 
     # -- contrato de RawChannel ----------------------------------------------
 
@@ -119,28 +138,56 @@ class CanalSimulado:
             return bytes(BATERIA)
 
         if fid == 0x2202:                                   # DPI extendido
-            if func == 0x00:
-                return b"\x01"                              # un sensor
-            if func == 0x02:                                # rangos
-                return (bytes([0, 0, 0])
-                        + DPI_MIN.to_bytes(2, "big")
-                        + (0xE000 | DPI_PASO).to_bytes(2, "big")
-                        + DPI_MAX.to_bytes(2, "big")
-                        + b"\x00\x00")
-            if func == 0x03:                                # DPI actual
-                return bytes([0]) + self.dpi.to_bytes(2, "big")
-            if func == 0x04:                                # fijar DPI
-                self.dpi = int.from_bytes(params[2:4], "big")
-                return bytes([0]) + self.dpi.to_bytes(2, "big")
+            # Números de función según Solaar: 5 = leer, 6 = escribir.
+            if func == 0x00:                                # getSensorCount
+                return b"\x01"
+            if func == 0x01:                                # getSensorCapabilities
+                # 0x0f -> tiene eje Y independiente y distancia de despegue
+                return bytes([0x00, 0x05, 0x0f, 0x00])
+            if func == 0x02:                                # getSensorDpiRanges
+                pagina = params[2]
+                cuerpo = (RANGOS_PAGINAS[pagina] if pagina < len(RANGOS_PAGINAS)
+                          else b"\x00" * 13)
+                return bytes([params[0], params[1], pagina]) + cuerpo
+            if func == 0x03:                                # getSensorDpiList
+                # Los cinco DPI que guarda el perfil onboard.
+                payload = bytes([0x00, 0x00])
+                for v in DPI_NIVELES:
+                    payload += v.to_bytes(2, "big")
+                return payload
+            if func == 0x04:                                # getSensorLodList
+                # Distancia de despegue de cada uno de los cinco niveles.
+                return bytes([0x00]) + bytes([self.lod] * len(DPI_NIVELES))
+            if func == 0x05:                                # getSensorDpi
+                return (bytes([0x00])
+                        + self.dpi.to_bytes(2, "big")
+                        + DPI_DEFECTO.to_bytes(2, "big")
+                        + self.dpi.to_bytes(2, "big")
+                        + DPI_DEFECTO.to_bytes(2, "big")
+                        + bytes([self.lod]))
+            if func == 0x06:                                # setSensorDpi
+                # params: [sensor, dpiX(2), dpiY(2), lod(1)]
+                self.dpi = int.from_bytes(params[1:3], "big")
+                if len(params) > 5:
+                    self.lod = params[5]
+                # El ratón devuelve el eco de lo que se le pidió.
+                return (bytes([0x00]) + self.dpi.to_bytes(2, "big")
+                        + self.dpi.to_bytes(2, "big") + bytes([self.lod]))
 
         if fid == 0x8061:                                   # tasa de reporte
-            if func == 0x00:
-                return b"\x00\x7F"                          # bits 0..6 activos
-            if func == 0x01:
+            # Volcado real: por receptor sólo hasta 1000 Hz (0x0f),
+            # por cable hasta 8000 Hz (0x7f).
+            if func == 0x00:                                # capacidades por conexión
+                return b"\x00\x0F" if params[0] == 0 else b"\x00\x7F"
+            if func == 0x01:                                # lista global
+                return b"\x00\x7F"
+            if func == 0x02:                                # tasa actual
                 return bytes([self.hz_idx])
-            if func == 0x02:
-                self.hz_idx = params[1]
-                return bytes([self.hz_idx])
+            if func == 0x03:                                # fijar tasa
+                # Comportamiento real del PRO X 2 por receptor: contesta "sin
+                # error" y NO cambia nada. Solaar tropieza con lo mismo. Se
+                # reproduce aquí para que el caso quede cubierto sin hardware.
+                return b"\x00"
 
         if fid == 0x0003:                                   # info y firmware
             if func == 0x00:
@@ -176,8 +223,15 @@ class CanalSimulado:
         if fid == 0x8090 and func == 0x00:                  # modo
             return b"\x00\x00"                              # arranca en onboard
 
-        if fid == 0x8100 and func == 0x00:                  # perfiles onboard
-            return bytes([0x01, 0x06, 0x05, 0x00])          # layout 0x06
+        if fid == 0x8100:                                   # perfiles onboard
+            if func == 0x00:                                # getOnboardProfilesInfo
+                return bytes([0x01, 0x07, 0x01, 0x05, 0x01, 0x05, 0x10, 0x00,
+                              0xff, 0x0a, 0x04, 0x00])      # volcado del PRO X 2
+            if func == 0x01:                                # setOnboardMode
+                self.modo_onboard = params[0]
+                return b"\x00"
+            if func == 0x02:                                # getOnboardMode
+                return bytes([self.modo_onboard])
 
         raise KeyError((fid, func))
 

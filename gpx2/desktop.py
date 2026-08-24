@@ -119,6 +119,30 @@ def _ids(sysname: str) -> tuple[int, int]:
     return (int(iface.property("vendor") or 0), int(iface.property("product") or 0))
 
 
+def _normalizar(nombre: str) -> str:
+    """Deja un nombre comparable: sin fabricante, sin puntuación, en minúsculas."""
+    n = nombre.lower()
+    for ruido in ("logitech", "logi", "receiver", "receptor", "wireless",
+                  "lightspeed", "usb", "mouse", "ratón", "raton"):
+        n = n.replace(ruido, " ")
+    return " ".join(n.split())
+
+
+def mismo_aparato(nombre_hidpp: str, nombre_kde: str) -> bool:
+    """¿Son el mismo ratón, visto por HID++ y visto por KWin?
+
+    No sirve comparar VID:PID: cuando el ratón va por receptor, HID++ habla con
+    el receptor (046d:c54d) y KWin ve el dispositivo emparejado (046d:40a9).
+    Son identificadores distintos del mismo aparato. Los nombres sí coinciden,
+    salvo por el fabricante delante.
+    """
+    a, b = _normalizar(nombre_hidpp), _normalizar(nombre_kde)
+    # Nombres muy cortos darían coincidencias por casualidad.
+    if len(a) < 4 or len(b) < 4:
+        return False
+    return a in b or b in a
+
+
 def listar_punteros() -> list[KdePointer]:
     """Todos los punteros que ve KWin. Lista vacía si no estamos en KDE.
 

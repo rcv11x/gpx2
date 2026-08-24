@@ -41,7 +41,7 @@ class Demonio:
         self.demo = demo
         self.raton = None
         self.motor: Motor | None = None
-        self.almacen = Almacen()
+        self.almacen = Almacen(demo=demo)
         self.jugando: dict[int, str] = {}      # pid -> id de perfil aplicado
         self._pids: set[int] = set()           # visto por CUALQUIER vigilante
         self.servicio = None                   # interfaz D-Bus, para las señales
@@ -77,7 +77,12 @@ class Demonio:
                     self.aplicar_por_defecto("ratón conectado")
             else:
                 try:
-                    self.motor.estado()
+                    # `estado()` se traga los errores para poder pintar la
+                    # interfaz aunque falle un ajuste, así que no sirve para
+                    # saber si el ratón sigue ahí: hay que preguntárselo.
+                    if not self.raton.hpp.ping(timeout=0.5):
+                        raise OSError("sin respuesta")
+                    self._reponer_si_ha_derivado()
                 except Exception:
                     log.info("se ha perdido el ratón")
                     self.raton, self.motor = None, None
@@ -109,6 +114,30 @@ class Demonio:
         if self.servicio is not None:
             self.servicio.emitir_perfil(perfil.id)
         return [str(c) for c in cambios]
+
+    def _reponer_si_ha_derivado(self) -> None:
+        """Vuelve a poner el perfil activo si el ratón se ha desviado.
+
+        El ratón sigue respondiendo, así que la comprobación de conexión no ve
+        nada raro, pero al despertarse ha vuelto a los ajustes de su perfil
+        interno. Sin esto, el DPI se pierde en silencio.
+        """
+        activo = self.motor.perfil_activo
+        perfil = self.almacen.obtener(activo) if activo else None
+        if perfil is None:
+            return
+
+        # Sólo se repone cuando el ratón ha vuelto a mandar él: ésa es la firma
+        # de que se ha reiniciado por su cuenta. Si sigue en modo host, una
+        # diferencia con el perfil la ha hecho alguien a propósito —tú, o la
+        # interfaz— y reponerla sería pelearse con quien está usando el
+        # programa: mueves el DPI y cinco segundos después vuelve solo.
+        onboard = self.raton.onboard
+        if onboard is not None and onboard.es_host():
+            return
+
+        if self.motor.ha_derivado(perfil):
+            self.aplicar(perfil, "el ratón había vuelto a sus ajustes")
 
     def aplicar_por_defecto(self, motivo: str = "") -> None:
         perfil = self.almacen.por_defecto()

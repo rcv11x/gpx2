@@ -35,6 +35,7 @@ class Mouse:
         self.rate = None
         self.battery = None
         self.mode = None
+        self.onboard = None
         self.buttons = None
         self.info = None
 
@@ -69,6 +70,7 @@ class Mouse:
         self.rate = self._primera(feat.RATE_CLASSES)
         self.battery = self._primera(feat.BATTERY_CLASSES)
         self.mode = self._primera([feat.ModeStatus])
+        self.onboard = self._primera([feat.OnboardProfiles])
         self.buttons = self._primera([feat.ReprogrammableControls])
         self.info = self._primera([feat.DeviceInfo])
 
@@ -86,13 +88,30 @@ class Mouse:
     def id_str(self) -> str:
         return self.node.id_str
 
+    def asegurar_host(self) -> bool | None:
+        """Pone el ratón en modo host si aún no lo está.
+
+        True si manda el PC, False si no se pudo, None si el ratón no tiene la
+        feature. Hay que llamarlo **antes de cada escritura**, no una vez al
+        arrancar: el modo host no persiste — el ratón vuelve a onboard al
+        apagarse o al reconectar el receptor — y en ese estado rechaza los
+        cambios con un error interno (0x05), que no dice nada de la causa.
+        """
+        if self.onboard is None:
+            return None
+        try:
+            return True if self.onboard.es_host() else self.onboard.set_host(True)
+        except Exception:
+            return False
+
     def leer_todo(self) -> dict:
         """Snapshot del estado, tolerante a fallos (para pintar la GUI)."""
         estado: dict = {"nombre": self.nombre, "errores": list(self.errores)}
         for clave, cap, metodo in (("dpi", self.dpi, "get"),
                                    ("rate", self.rate, "get"),
                                    ("battery", self.battery, "get"),
-                                   ("mode", self.mode, "get")):
+                                   ("mode", self.mode, "get"),
+                                   ("onboard", self.onboard, "get")):
             if cap is None:
                 estado[clave] = None
                 continue
@@ -126,13 +145,15 @@ class Discovery:
 def discover(timeout: float = 0.4) -> Discovery:
     """Recorre el sistema y devuelve los ratones HID++ con los que se puede hablar."""
     res = Discovery()
+    # (nombre, device_index) de los ratones ya añadidos, para deduplicar cuando
+    # el mismo dispositivo físico aparece en varios nodos hidraw (p.ej. receptor Bolt).
+    vistos: set[tuple[str, int]] = set()
+
     for node in enumerate_nodes():
         if not (node.hidpp and node.is_logitech):
             if node.vid and not node.hidpp:
                 res.otros.append(node)
             continue
-        # RawChannel ya no abre nada al construirse: el nodo se abre dentro
-        # de cada petición. Los errores de permiso salen en el primer ping.
         ch = RawChannel(node.path)
         encontrado = False
         for idx in [IDX_DIRECT, *IDX_RECEIVER]:
@@ -148,10 +169,14 @@ def discover(timeout: float = 0.4) -> Discovery:
                 continue
             if not ver:
                 continue
-            res.ratones.append(Mouse(node, ch, idx, ver))
+            raton = Mouse(node, ch, idx, ver)
+            clave = (raton.nombre, idx)
+            if clave in vistos:
+                raton.close()
+            else:
+                vistos.add(clave)
+                res.ratones.append(raton)
             encontrado = True
-            # Un receptor puede tener varios emparejados, pero comparten canal:
-            # de momento nos quedamos con el primero que responde.
             break
         if not encontrado:
             ch.close()

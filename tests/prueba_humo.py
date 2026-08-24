@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 from gpx2.engine import Motor
+from gpx2.features import EscrituraIgnorada
 from gpx2.mock import raton_simulado
 from gpx2.profiles import Activacion, Ajustes, Almacen, Perfil
 from gpx2.watcher.base import Juego
@@ -32,19 +33,46 @@ def main() -> int:
     raton = raton_simulado()
     estado = raton.leer_todo()
     comprobar(estado["nombre"] == "PRO X SUPERLIGHT 2", "lee el nombre por HID++")
-    comprobar(estado["dpi"].actual == 1600, "lee el DPI actual")
-    comprobar(estado["dpi"].maximo == 32000, "decodifica el rango de DPI")
-    comprobar(estado["rate"].actual_hz == 2000, "lee la tasa de reporte")
-    comprobar(8000 in estado["rate"].disponibles, "decodifica las tasas disponibles")
+    comprobar(estado["dpi"].actual == 800, "lee el DPI actual")
+    # El sensor del PRO X 2 llega a 44000: sale del flujo paginado de 0x2202 f2,
+    # que el simulador reproduce byte a byte del volcado real.
+    comprobar(estado["dpi"].minimo == 100 and estado["dpi"].maximo == 44000,
+              "decodifica el rango de DPI")
+    comprobar(len(raton.dpi._lista()) == 957, "reconstruye la lista completa de DPIs")
+    comprobar(estado["rate"].actual_hz == 1000, "lee la tasa de reporte")
+    # El simulador va por receptor: ahí el ratón declara hasta 8000 Hz.
+    comprobar(estado["rate"].disponibles == [8000, 4000, 2000, 1000, 500, 250, 125],
+              "decodifica las tasas de esta conexión")
+    # Y por cable sólo llegaría a 1000: son capacidades distintas.
+    comprobar(estado["rate"].otra_conexion == [1000, 500, 250, 125],
+              "y las de la otra vía")
     comprobar(estado["battery"].percent == 78, "lee la batería")
+    comprobar(estado["onboard"].startswith("onboard"), "lee el modo onboard/host")
     comprobar(len(raton.feature_table) == 15, "enumera la tabla de features")
     comprobar(not estado["errores"], "sin errores al construir el dispositivo")
 
     print("2. Escritura")
     raton.dpi.set(3200)
     comprobar(raton.dpi.get().actual == 3200, "escribe y relee el DPI")
-    raton.rate.set(8000)
-    comprobar(raton.rate.get().actual_hz == 8000, "escribe y relee los Hz")
+    # 12345 no es un valor válido del sensor: hay que ajustarlo al más cercano.
+    raton.dpi.set(12345)
+    comprobar(raton.dpi.get().actual == 12300, "ajusta al DPI válido más cercano")
+    # El ratón real acepta la orden y no la aplica; hay que detectarlo, no
+    # dar por bueno que no hubo excepción.
+    try:
+        raton.rate.set(500)
+        ignorada = None
+    except EscrituraIgnorada as e:
+        ignorada = str(e)
+    comprobar(ignorada is not None, "detecta que el ratón ignoró la tasa")
+    comprobar(ignorada and "cable" in ignorada, "y explica por qué al usuario")
+    comprobar(raton.rate.get().actual_hz == 1000, "la tasa sigue donde estaba")
+    comprobar(raton.onboard.set_host(True), "pasa el ratón a modo host")
+    comprobar(raton.onboard.set_host(False), "y lo devuelve a modo onboard")
+    # Tras reconectarse el ratón vuelve a onboard y rechaza las escrituras con
+    # un error interno; hay que devolverlo a host antes de tocar nada.
+    comprobar(raton.asegurar_host() is True, "asegurar_host() lo recupera")
+    comprobar(raton.asegurar_host() is True, "y no molesta si ya estaba")
 
     print("3. Perfiles en disco")
     with tempfile.TemporaryDirectory() as tmp:
@@ -53,7 +81,7 @@ def main() -> int:
             nombre="Escritorio", por_defecto=True,
             ajustes=Ajustes(dpi=1600, report_rate_hz=1000)))
         almacen.guardar(Perfil(
-            nombre="Shooter", ajustes=Ajustes(dpi=800, report_rate_hz=4000),
+            nombre="Shooter", ajustes=Ajustes(dpi=800, report_rate_hz=1000),
             activacion=Activacion(ejecutables=["cs2"], steam_appids=[730])))
         errores = almacen.cargar()
         comprobar(not errores, "los TOML que escribimos se releen sin errores")
@@ -70,12 +98,31 @@ def main() -> int:
 
         print("5. Motor: sólo manda lo que cambia")
         motor = Motor(raton)
+        raton.onboard.set_host(False)      # como lo encuentra tras reconectar
         cambios = motor.aplicar(almacen.obtener("shooter"))
-        comprobar(len(cambios) == 2, "aplica los dos ajustes que difieren")
+        comprobar(len(cambios) == 2, "aplica lo que difiere y además pasa a host")
+        comprobar(cambios[0].ajuste == "modo", "el modo host se arregla primero")
         comprobar(raton.dpi.get().actual == 800, "el DPI queda aplicado")
         cambios = motor.aplicar(almacen.obtener("shooter"))
         comprobar(cambios == [], "reaplicar el mismo perfil no manda nada")
+
+        # El ratón vuelve a sus ajustes internos al despertarse, y sigue
+        # respondiendo: hay que notarlo mirando, no esperando un aviso.
+        perfil = almacen.obtener("shooter")
+        comprobar(not motor.ha_derivado(perfil), "no ve deriva donde no la hay")
+        raton.dpi.set(3200)                     # como si se hubiera despertado
+        comprobar(motor.ha_derivado(perfil), "detecta que el ratón se ha desviado")
+        motor.aplicar(perfil)
+        comprobar(raton.dpi.get().actual == 800, "y lo repone")
+
         comprobar(motor.perfil_activo == "shooter", "recuerda el perfil activo")
+        # La tasa no se puede escribir por receptor: se anota una vez y no se
+        # reintenta en cada comprobación.
+        otro = Perfil(nombre="Alta", ajustes=Ajustes(report_rate_hz=500))
+        fallos_1 = [c for c in motor.aplicar(otro) if not c.ok]
+        comprobar(len(fallos_1) == 1, "informa una vez de lo que no se puede")
+        comprobar("report_rate_hz" in motor.imposibles, "y lo recuerda")
+        comprobar(motor.aplicar(otro) == [], "no lo reintenta sin parar")
 
     print("6. Botones reprogramables (0x1B04)")
     botones = raton.buttons

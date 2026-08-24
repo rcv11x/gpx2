@@ -20,9 +20,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
-def directorio_perfiles() -> Path:
+def directorio_perfiles(demo: bool = False) -> Path:
+    """Dónde viven los perfiles.
+
+    El modo demo usa una carpeta aparte a propósito: el ratón simulado no debe
+    ensuciar la configuración real con ajustes que no ha dado ningún
+    dispositivo tuyo.
+    """
     base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
-    return Path(base) / "gpx2" / "profiles"
+    return Path(base) / "gpx2" / ("profiles-demo" if demo else "profiles")
 
 
 @dataclass
@@ -138,8 +144,8 @@ def desde_toml(datos: dict, ruta: Path | None = None) -> Perfil:
 class Almacen:
     """La colección de perfiles en disco."""
 
-    def __init__(self, directorio: Path | None = None):
-        self.dir = Path(directorio) if directorio else directorio_perfiles()
+    def __init__(self, directorio: Path | None = None, demo: bool = False):
+        self.dir = Path(directorio) if directorio else directorio_perfiles(demo)
         self.perfiles: dict[str, Perfil] = {}
 
     def cargar(self) -> list[str]:

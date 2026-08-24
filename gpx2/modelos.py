@@ -220,9 +220,20 @@ G203 = Modelo(
     # 0x8071 f0: una sola zona de luz, con siete efectos. Los dos primeros
     # bytes de cada respuesta son el eco de lo preguntado; la cuenta de zonas
     # va en el tercero, y la de efectos en el quinto de la respuesta de zona.
+    # Cada efecto se pregunta por su índice y contesta [zona, índice, id(2), …].
+    # Los siete que admite son 0x00, 0x01, 0x03, 0x04, 0x0A, 0x0D y 0x0E, y el
+    # primer byte del bloque del perfil sale de esta misma lista: el ratón
+    # guardaba 0x04, que es el efecto del índice 3.
     rgb={
         b"\xff\xff\x00": bytes.fromhex("ff00010003000400") + bytes(8),
         b"\x00\xff\x00": bytes.fromhex("0000000207010000") + bytes(8),
+        b"\x00\x00\x00": bytes.fromhex("0000000000000000") + bytes(8),
+        b"\x00\x01\x00": bytes.fromhex("0001000100000000") + bytes(8),
+        b"\x00\x02\x00": bytes.fromhex("00020003c00503e0") + bytes(8),
+        b"\x00\x03\x00": bytes.fromhex("000300048421001e") + bytes(8),
+        b"\x00\x04\x00": bytes.fromhex("000400 0ac0011e0b".replace(" ", "")) + bytes(8),
+        b"\x00\x05\x00": bytes.fromhex("000500 0d00000032".replace(" ", "")) + bytes(8),
+        b"\x00\x06\x00": bytes.fromhex("000600 0e0000001e".replace(" ", "")) + bytes(8),
     },
 )
 

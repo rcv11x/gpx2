@@ -903,16 +903,27 @@ def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
                 print(f"     ⚠ no se pudieron cerrar: {e}")
 
 
-def nombre_efecto(ident: int) -> str:
-    """Nombre tentativo de un identificador de efecto de 0x8071.
+# Identificadores de efecto. Los usan tanto 0x8071 como el primer byte del
+# bloque de 11 que guarda el perfil onboard: es el mismo espacio, y eso quedó
+# claro al ver que el G203 tenía 0x04 guardado y 0x04 en su lista de efectos.
+#
+# El 0x00 es seguro: no lleva parámetros. Los demás son hipótesis mientras
+# nadie confirme el nombre con la luz delante — un identificador no dice qué
+# se ve.
+EFECTOS = {
+    0x0000: "apagado",
+    0x0001: "¿color fijo?",
+    0x0003: "¿ciclo de color?",
+    0x0004: "¿onda de color?",
+    0x000A: "¿respiración?",
+    0x000D: "¿?",
+    0x000E: "¿?",
+}
 
-    Sin confirmar: hasta que un ratón no diga "tengo el 0x0003" con la luz a la
-    vista, esto son etiquetas para orientarse en el volcado, no protocolo.
-    """
-    return {0x0000: "(apagado)", 0x0001: "(¿color fijo?)",
-            0x0002: "(¿respiración?)", 0x0003: "(¿ciclo de color?)",
-            0x0004: "(¿onda?)", 0x0005: "(¿starlight?)",
-            0x000A: "(¿respiración?)", 0x000B: "(¿ripple?)"}.get(ident, "")
+
+def nombre_efecto(ident: int) -> str:
+    nombre = EFECTOS.get(ident)
+    return f"({nombre})" if nombre else "(sin identificar)"
 
 
 def bloque_dpi_clasico(s: Sonda) -> None:
@@ -1066,13 +1077,13 @@ def describir_efecto(b: bytes) -> str:
     tipo = b[0]
     if tipo == 0x00:
         return "apagado"
-    rgb = f"#{b[1]:02X}{b[2]:02X}{b[3]:02X}"
-    nombres = {0x01: "color fijo", 0x02: "respiración", 0x03: "ciclo de color",
-               0x04: "¿onda de color?", 0x05: "¿starlight?", 0x0A: "¿respiración?"}
-    hipotesis = nombres.get(tipo, f"tipo 0x{tipo:02X} desconocido")
+    etiqueta = f"0x{tipo:02X} {nombre_efecto(tipo)}"
+    # El color sólo tiene sentido en los efectos que lo llevan; en los de
+    # movimiento estos tres bytes están a cero y anunciar "#000000" hacía
+    # pensar que el efecto era negro.
     if tipo == 0x01:
-        return f"{hipotesis} {rgb}"
-    return f"{hipotesis}  (color {rgb}, resto sin descifrar)"
+        return f"{etiqueta} #{b[1]:02X}{b[2]:02X}{b[3]:02X}"
+    return f"{etiqueta}   parámetros: {b[1:].hex(' ')}"
 
 
 def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:

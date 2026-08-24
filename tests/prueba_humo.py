@@ -222,6 +222,17 @@ def main() -> int:
     comprobar(gen[2] == 1, "0x8071 declara una sola zona de luz")
     z0 = g.hpp.call(g.hpp.of(0x8071), 0x00, b"\x00\xff\x00")
     comprobar(z0[4] == 7, "y que esa zona admite siete efectos")
+    # Cada efecto se pide por su índice y contesta [zona, índice, id(2), …].
+    ids = [int.from_bytes(g.hpp.call(g.hpp.of(0x8071), 0x00,
+                                     bytes([0, i, 0]))[2:4], "big")
+           for i in range(z0[4])]
+    comprobar(ids == [0x00, 0x01, 0x03, 0x04, 0x0A, 0x0D, 0x0E],
+              "enumera los siete identificadores de efecto")
+    # El hallazgo que une las dos mitades: el primer byte del bloque que guarda
+    # el perfil sale de esta misma lista, no de otro espacio de valores.
+    guardado = crudo_g[208]
+    comprobar(guardado in ids,
+              "el efecto guardado en el perfil es uno de los que declara 0x8071")
 
     print("8. El modo lo elige el usuario, no el demonio")
     # El estado del modo demo tiene que estar aparte del real: si compartieran

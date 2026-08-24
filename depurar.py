@@ -587,6 +587,123 @@ def bloque_restaurar(s: Sonda, ruta: str, sector: int) -> None:
     print("  ✓ restaurado" if vuelta == datos else "  ✗ no coincide tras escribir")
 
 
+# Acciones que se pueden poner en un botón, por nombre. Los cuatro bytes son
+# los que el ratón guarda tal cual en su perfil.
+ACCIONES = {
+    "izquierdo":  bytes([0x80, 0x01, 0x00, 0x01]),
+    "derecho":    bytes([0x80, 0x01, 0x00, 0x02]),
+    "central":    bytes([0x80, 0x01, 0x00, 0x04]),
+    "atras":      bytes([0x80, 0x01, 0x00, 0x08]),
+    "adelante":   bytes([0x80, 0x01, 0x00, 0x10]),
+    "ciclar-dpi": bytes([0x90, 0x05, 0x00, 0x00]),
+    "dpi-mas":    bytes([0x90, 0x03, 0x00, 0x00]),
+    "dpi-menos":  bytes([0x90, 0x04, 0x00, 0x00]),
+    "bateria":    bytes([0x90, 0x0C, 0x00, 0x00]),
+    "nada":       bytes([0x80, 0x00, 0x00, 0x00]),
+}
+
+
+def bloque_cambiar_boton(s: Sonda, sector: int, numero: int, accion: str,
+                         ruta_copia: str, forzar: bool) -> None:
+    """Cambia un botón del perfil onboard. Escribe en el ratón.
+
+    Guarda antes el sector entero, para poder deshacerlo con --restaurar.
+    """
+    titulo(f"CAMBIAR EL BOTÓN {numero} A «{accion}» "
+           f"(sector 0x{sector:04X})")
+
+    if accion not in ACCIONES:
+        print(f"  «{accion}» no está. Disponibles: {', '.join(ACCIONES)}")
+        return
+    if numero in (0, 1) and not forzar:
+        print("  Los botones 0 y 1 son el clic izquierdo y el derecho. "
+              "Cambiarlos\n  puede dejarte sin poder pulsar nada mientras el "
+              "perfil esté activo.\n  Si de verdad quieres, añade --forzar.")
+        return
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    tam = int.from_bytes(info[7:9], "big")
+    cuantos = info[5]
+
+    original = leer_sector(s, sector, tam)
+    if original is None or len(original) != tam:
+        print("  No se pudo leer el sector entero.")
+        return
+    if crc16_ccitt(original[:tam - 2]) != int.from_bytes(original[tam - 2:], "big"):
+        print("  El CRC del sector no cuadra. No se toca nada.")
+        return
+
+    with open(ruta_copia, "wb") as fh:
+        fh.write(original)
+    print(f"  Copia guardada en {ruta_copia}")
+
+    inicio = buscar_botones(original, cuantos)
+    if inicio is None:
+        print("  No se encontró el bloque de botones.")
+        return
+    if not 0 <= numero < cuantos:
+        print(f"  Este perfil sólo tiene {cuantos} botones (0..{cuantos - 1}).")
+        return
+
+    pos = inicio + numero * 4
+    antes = original[pos:pos + 4]
+    nuevo_valor = ACCIONES[accion]
+    print(f"  Botón {numero}, en el byte {pos}:")
+    print(f"     antes: {hx(antes)}   {describir_boton(antes)}")
+    print(f"     ahora: {hx(nuevo_valor)}   {describir_boton(nuevo_valor)}")
+    if antes == nuevo_valor:
+        print("\n  Ya estaba así. No se escribe nada.")
+        return
+
+    # El CRC cubre todo el sector menos sus dos últimos bytes.
+    cuerpo = bytearray(original[:tam - 2])
+    cuerpo[pos:pos + 4] = nuevo_valor
+    modificado = bytes(cuerpo) + crc16_ccitt(bytes(cuerpo)).to_bytes(2, "big")
+    print(f"  CRC nuevo: 0x{int.from_bytes(modificado[-2:], 'big'):04X}")
+
+    try:
+        escribir_sector(s, sector, modificado)
+    except (HidppError, NoResponse, OSError) as e:
+        print(f"  ⚠ la escritura falló: {e}")
+        print(f"  Restaura con: sudo python3 depurar.py --restaurar "
+              f"{ruta_copia} --sector {sector}")
+        return
+
+    despues = leer_sector(s, sector, tam)
+    if despues == modificado:
+        print("\n     *** ESCRITO: el sector quedó como queríamos ***")
+    else:
+        print("\n     ✗ el sector no quedó como se pidió.")
+        print(f"     Restaura con: sudo python3 depurar.py --restaurar "
+              f"{ruta_copia} --sector {sector}")
+        return
+
+    modo = s.llamar(0x8100, 0x02)
+    if modo and modo[0] != 0x01:
+        print("\n  OJO: el ratón está en modo host, y en ese modo NO usa su")
+        print("  perfil interno, así que el botón seguirá haciendo lo de antes.")
+        print("  Para probarlo hay que pasarlo a onboard:")
+        print("     sudo python3 depurar.py --modo onboard")
+        print("  y para volver:")
+        print("     sudo python3 depurar.py --modo host")
+    print(f"\n  Para deshacer el cambio: sudo python3 depurar.py --restaurar "
+          f"{ruta_copia} --sector {sector}")
+
+
+def bloque_cambiar_modo(s2: Sonda, modo: str) -> None:
+    """Cambia entre onboard y host desde la línea de órdenes."""
+    titulo(f"MODO -> {modo}")
+    valor = 0x01 if modo == "onboard" else 0x02
+    s2.llamar(0x8100, 0x01, bytes([valor]))
+    ahora = s2.llamar(0x8100, 0x02)
+    if ahora:
+        nombres = {0x01: "onboard (manda el ratón)", 0x02: "host (manda el PC)"}
+        print(f"  modo actual: {nombres.get(ahora[0], hex(ahora[0]))}")
+
+
 def bloque_perfiles_onboard(s: Sonda) -> None:
     """Vuelca la memoria de perfiles del ratón. Sólo lee, no escribe nada.
 
@@ -945,9 +1062,19 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--cambiar-boton", metavar="N=ACCION",
+                    help="cambia un botón del perfil onboard, p. ej. 3=central. "
+                         "Acciones: izquierdo, derecho, central, atras, "
+                         "adelante, ciclar-dpi, dpi-mas, dpi-menos, bateria, nada")
+    ap.add_argument("--forzar", action="store_true",
+                    help="permite cambiar el clic izquierdo o el derecho")
+    ap.add_argument("--modo", choices=("onboard", "host"),
+                    help="cambia el modo del ratón y sale")
     ap.add_argument("--probar-escritura", action="store_true",
                     help="reescribe un perfil DESHABILITADO con lo mismo que "
                          "tenía, para comprobar el mecanismo sin arriesgar nada")
+    ap.add_argument("--sector-perfil", type=int, default=1,
+                    help="sector del perfil a modificar (por defecto 1, el activo)")
     ap.add_argument("--sector", type=int, default=2,
                     help="sector sobre el que probar o restaurar (por defecto 2, "
                          "que está deshabilitado)")
@@ -986,6 +1113,24 @@ def main() -> int:
         return 1
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
+
+    if args.modo:
+        bloque_cambiar_modo(s, args.modo)
+        ch.close()
+        return 0
+
+    if args.cambiar_boton:
+        try:
+            n, _, accion = args.cambiar_boton.partition("=")
+            numero = int(n)
+        except ValueError:
+            print("  Formato: --cambiar-boton 3=central")
+            ch.close()
+            return 1
+        bloque_cambiar_boton(s, args.sector_perfil, numero, accion,
+                             args.copia, args.forzar)
+        ch.close()
+        return 0
 
     if args.restaurar or args.probar_escritura:
         if args.restaurar:

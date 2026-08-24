@@ -318,6 +318,15 @@ el 4): así se ejercita el mecanismo entero sin que un fallo afecte a nada que
 el ratón use. `depurar.py --probar-escritura` hace eso, guardando antes una
 copia del sector en un fichero por si hay que restaurarlo.
 
+**Comprobado en el PRO X 2**: el sector 2 se reescribió con sus propios bytes y
+volvió idéntico. El mecanismo y el CRC son correctos.
+
+> **El perfil onboard sólo manda en modo onboard.** Cambiar un botón en el
+> perfil no se nota mientras el ratón esté en modo host, que es donde lo pone
+> gpx2 para controlar el DPI. Son dos mundos: en host mandamos nosotros y nada
+> persiste; en onboard manda el perfil y todo persiste. Configurar botones
+> obliga a elegir, y esa decisión está sin tomar.
+
 ### Leer un sector entero
 
 El tamaño de sector es 255, que **no es múltiplo de 16**, y cada lectura

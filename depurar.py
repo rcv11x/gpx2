@@ -771,6 +771,79 @@ def bloque_un_registro(nodo_forzado: str | None, direccion: int) -> None:
         canal.close()
 
 
+def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
+    """Desbloquea las features internas y reintenta escribir la tasa.
+
+    La 0x1E00 es el mecanismo de Logitech para abrir las features marcadas
+    como internas u ocultas; este ratón declara doce. Solaar sólo define la
+    constante y no la usa, así que es terreno sin explorar. La hipótesis: que
+    la escritura de la tasa esté detrás de esa puerta.
+
+    Se deja el ratón como estaba al terminar.
+    """
+    titulo("FEATURES OCULTAS (0x1E00) — ¿abren la escritura de la tasa?")
+
+    if not s.tiene(0x1E00):
+        print("  Este ratón no expone 0x1E00.")
+        return
+    MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
+
+    antes = s.mostrar("f0  ¿están abiertas?", 0x1E00, 0x00)
+    estado_previo = antes[0] if antes else 0
+
+    print("\n  Abriendo…")
+    s.mostrar("f1  abrir (0x01)", 0x1E00, 0x01, b"\x01")
+    ahora = s.mostrar("f0  ¿y ahora?", 0x1E00, 0x00)
+    if not ahora or not ahora[0]:
+        print("     no se abrieron; se deja como estaba")
+        return
+    print("     ✓ abiertas")
+
+    try:
+        # ¿Cambia lo que declara la tasa de reporte con las features abiertas?
+        print("\n  Lo que dice ahora 0x8061:")
+        for etiqueta, fid, func, params in (
+                ("f0 cable", 0x8061, 0x00, b"\x00"),
+                ("f0 inalámbrico", 0x8061, 0x00, b"\x01"),
+                ("f1 lista", 0x8061, 0x01, b""),
+                ("f2 actual", 0x8061, 0x02, b"")):
+            r = s.mostrar(f"     {etiqueta}", fid, func, params)
+            if r and func in (0x00, 0x01):
+                bm = int.from_bytes(r[0:2], "big")
+                print(f"        -> {[MAPEO_HZ[n] for n in range(7) if bm & (1 << n)]}")
+
+        idx = MAPEO_HZ.index(objetivo_hz)
+        actual = s.llamar(0x8061, 0x02)
+        print(f"\n  Escribiendo el índice {idx} ({objetivo_hz} Hz), "
+              f"estando ahora en {actual[0] if actual else '?'}:")
+        for etiqueta, params in (("f3 [idx]", bytes([idx])),
+                                 ("f3 [idx, 0, 0]", bytes([idx, 0, 0]))):
+            try:
+                r = s.hpp.call(s.tabla[0x8061].index, 0x03, params)
+                leido = s.llamar(0x8061, 0x02)
+                marca = ("← CAMBIÓ" if leido and leido[0] == idx
+                         else f"(sigue en {leido[0] if leido else '?'})")
+                print(f"     {etiqueta:16} resp {hx(r[:4])}  {marca}")
+                if leido and leido[0] == idx:
+                    print("\n     *** FUNCIONA con las features ocultas abiertas ***")
+                    print("     Mide la tasa real para confirmarlo:")
+                    print("        python3 depurar.py --medir")
+                    return
+            except (HidppError, NoResponse, OSError) as e:
+                print(f"     {etiqueta:16} ⚠ {e}")
+        print("\n     Tampoco por aquí.")
+    finally:
+        # Dejarlo abierto sería dejar el ratón en un estado que nadie espera.
+        if not estado_previo:
+            print("\n  Cerrando las features ocultas…")
+            try:
+                s.hpp.call(s.tabla[0x1E00].index, 0x01, b"\x00")
+                fin = s.llamar(0x1E00, 0x00)
+                print(f"     estado final: {fin[0] if fin else '?'}")
+            except (HidppError, NoResponse, OSError) as e:
+                print(f"     ⚠ no se pudieron cerrar: {e}")
+
+
 def bloque_medir(segundos: float) -> None:
     titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
     punteros = punteros_del_sistema()
@@ -1531,6 +1604,9 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--features-ocultas", action="store_true",
+                    help="abre las features internas (0x1E00) y reintenta "
+                         "escribir la tasa; lo deja como estaba al salir")
     ap.add_argument("--registro", metavar="0xNN",
                     help="barre los parámetros de un registro concreto")
     ap.add_argument("--registros", action="store_true",
@@ -1590,6 +1666,11 @@ def main() -> int:
         return 1
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
+
+    if args.features_ocultas:
+        bloque_features_ocultas(s, args.hz or 4000)
+        ch.close()
+        return 0
 
     if args.modo:
         bloque_cambiar_modo(s, args.modo)

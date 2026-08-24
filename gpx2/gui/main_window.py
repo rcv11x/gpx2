@@ -213,10 +213,18 @@ class PaginaRaton(QWidget):
         textos.setSpacing(2)
         titulo = QLabel(self.estado["nombre"])
         titulo.setObjectName("Titulo")
-        sub = QLabel(f"{self.raton.id_str} · {self.raton.conexion} · "
-                     f"HID++ {self.raton.protocolo[0]}.{self.raton.protocolo[1]} · "
-                     f"{self.raton.node.path}")
+        # El identificador USB, el índice y el nodo son datos de depuración:
+        # no ayudan a nadie a usar el programa y hacían la cabecera ilegible.
+        # Siguen a mano en el tooltip y en la pestaña de Diagnóstico.
+        from ..hidpp import IDX_DIRECT
+        via = ("Conectado por cable" if self.raton.index == IDX_DIRECT
+               else "Conectado sin cable")
+        sub = QLabel(via)
         sub.setObjectName("Suave")
+        sub.setToolTip(
+            f"{self.raton.id_str} · {self.raton.conexion} · "
+            f"HID++ {self.raton.protocolo[0]}.{self.raton.protocolo[1]} · "
+            f"{self.raton.node.path}")
         textos.addWidget(titulo)
         textos.addWidget(sub)
         lay.addLayout(textos)
@@ -453,10 +461,13 @@ class PaginaRaton(QWidget):
         self._set_dpi(valor)
 
     def _tarjeta_kde(self) -> Tarjeta:
-        t = Tarjeta("Aceleración del escritorio (KDE)",
-                    "Esto no es el ratón, es lo que hace Plasma con lo que el "
-                    "sensor mide. Para jugar interesa el perfil plano: sin "
-                    "aceleración, la distancia depende sólo del movimiento físico.")
+        t = Tarjeta("Velocidad del puntero en el escritorio",
+                    "Este ajuste no es del ratón: es de Plasma, y se aplica "
+                    "encima de lo que mida el sensor. Cambiarlo aquí es lo "
+                    "mismo que hacerlo en los ajustes del sistema.\n\n"
+                    "Para jugar conviene el perfil plano: sin aceleración, "
+                    "recorres siempre la misma distancia con el mismo "
+                    "movimiento de la mano, muevas rápido o despacio.")
         if self.puntero_kde is None:
             t.añadir(QLabel("KWin no expone este dispositivo como puntero."))
             return t
@@ -1524,6 +1535,7 @@ class VentanaPrincipal(QMainWindow):
         self._firma_nodos: tuple = ()
         self._ciclos = 0
         self._escaneando = False
+        self._fallos = 0
         self._vigilante = QTimer(self)
         self._vigilante.setInterval(800)
         self._vigilante.timeout.connect(self._vigilar)
@@ -1553,7 +1565,9 @@ class VentanaPrincipal(QMainWindow):
         firma = self._firma()
         if firma != self._firma_nodos:
             self._firma_nodos = firma
-            self.statusBar().showMessage("Ha cambiado un dispositivo…")
+            # Esto sí lo ha provocado el usuario enchufando algo, así que
+            # decirlo tiene sentido.
+            self.statusBar().showMessage("Ha cambiado un dispositivo…", 4000)
             self._rescan.start()          # reinicia la espera si llegan más
             return
 
@@ -1569,8 +1583,16 @@ class VentanaPrincipal(QMainWindow):
         pagina = self.pila.currentWidget()
         if isinstance(pagina, PaginaRaton):
             if not pagina.refrescar_bateria():
-                self.escanear()
+                # El demonio consulta el ratón cada cinco segundos y nosotros
+                # cada cuatro: alguna petición se pierde de vez en cuando. Un
+                # fallo suelto no significa que el ratón se haya ido, y
+                # rescanear por él llenaba la barra de estado de mensajes.
+                self._fallos += 1
+                if self._fallos >= 2:
+                    self._fallos = 0
+                    self.escanear(silencioso=True)
                 return
+            self._fallos = 0
             # El demonio puede haber cambiado de perfil, o el ratón haber
             # vuelto a los suyos al despertarse: que se vea.
             pagina.refrescar_ajustes()
@@ -1582,7 +1604,7 @@ class VentanaPrincipal(QMainWindow):
         # el escaneo de hace un momento pudo llegar demasiado pronto. Sin este
         # reintento habría que pulsar "Volver a escanear" a mano.
         if not (self.hallazgo and self.hallazgo.ratones) and self._hay_logitech():
-            self.escanear()
+            self.escanear(silencioso=True)
 
     @staticmethod
     def _hay_logitech() -> bool:
@@ -1597,16 +1619,26 @@ class VentanaPrincipal(QMainWindow):
 
     # -- escaneo --------------------------------------------------------------
 
-    def escanear(self) -> None:
-        # `processEvents` de más abajo deja correr el temporizador de
-        # vigilancia, que llamaría aquí otra vez y se llevaría por delante los
-        # objetos que este escaneo está construyendo.
+    def escanear(self, silencioso: bool = False) -> None:
+        """Vuelve a mirar qué hay conectado.
+
+        `processEvents` de más abajo deja correr el temporizador de vigilancia,
+        que llamaría aquí otra vez y se llevaría por delante los objetos que
+        este escaneo está construyendo.
+
+        Los escaneos automáticos van en silencio: enseñar "Buscando
+        dispositivos…" cada pocos segundos, sin que nadie lo haya pedido, hace
+        pensar que el programa está haciendo algo raro.
+        """
         if self._escaneando:
             return
         self._escaneando = True
         try:
-            with _ocupado(self, "Buscando dispositivos…"):
+            if silencioso:
                 self._escanear()
+            else:
+                with _ocupado(self, "Buscando dispositivos…"):
+                    self._escanear()
         finally:
             self._escaneando = False
 

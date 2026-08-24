@@ -234,6 +234,29 @@ def main() -> int:
     comprobar(guardado in ids,
               "el efecto guardado en el perfil es uno de los que declara 0x8071")
 
+    # La prueba guiada de efectos escribe en el ratón de otra persona, así que
+    # lo que tiene que estar comprobado no es que escriba, sino que devuelva el
+    # perfil exactamente a como estaba.
+    from gpx2.onboard import crc16_ccitt as _crc
+    antes = og.leer_sector(1)
+
+    def _con_efecto(base, bloque):
+        cuerpo = bytearray(base[:len(base) - 2])
+        for hueco in (208, 219):
+            cuerpo[hueco:hueco + 11] = bloque
+        return bytes(cuerpo) + _crc(bytes(cuerpo)).to_bytes(2, "big")
+
+    rojo = bytes([0x01, 0xFF, 0x00, 0x00]) + bytes(7)
+    og.escribir_sector(1, _con_efecto(antes, rojo))
+    tras = og.leer_sector(1)
+    comprobar(tras[208:219] == rojo, "escribe un efecto de luz en el perfil")
+    comprobar(_crc(tras[:-2]) == int.from_bytes(tras[-2:], "big"),
+              "y el CRC del sector sigue cuadrando")
+    comprobar(tras[219:230] == rojo, "lo escribe en los dos huecos, no en uno")
+    og.escribir_sector(1, antes)
+    comprobar(og.leer_sector(1) == antes,
+              "y restaurar deja el perfil idéntico al de antes, byte a byte")
+
     print("8. El modo lo elige el usuario, no el demonio")
     # El estado del modo demo tiene que estar aparte del real: si compartieran
     # fichero, ejecutar estas pruebas cambiaría la configuración del ratón de

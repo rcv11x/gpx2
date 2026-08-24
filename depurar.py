@@ -1413,6 +1413,133 @@ def bloque_botones_de_fabrica(s: Sonda, sector: int, ruta_copia: str) -> None:
         print("\n     ✗ no quedó como se pidió")
 
 
+def bloque_probar_efectos(s: Sonda, sector: int, ruta_copia: str) -> None:
+    """Prueba guiada: escribe cada efecto de luz y pregunta qué se ve.
+
+    Es la única forma de saber qué significa cada identificador. El ratón dice
+    que admite el 0x03, pero no dice que el 0x03 sea el arcoíris; eso sólo lo
+    sabe quien lo está mirando. Sirve además para confirmar dónde van el color
+    y los demás parámetros dentro del bloque de once bytes.
+
+    Escribe en el ratón, así que: se guarda copia del sector antes, se
+    restaura al terminar pase lo que pase, y si el CRC de lo que hay no cuadra
+    no se toca nada. El perfil vuelve a como estaba al acabar.
+    """
+    titulo("PRUEBA GUIADA DE EFECTOS DE LUZ")
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    tam = int.from_bytes(info[7:9], "big")
+
+    original = leer_sector(s, sector, tam)
+    if original is None or len(original) != tam:
+        print("  No se pudo leer el sector entero.")
+        return
+    if crc16_ccitt(original[:tam - 2]) != int.from_bytes(original[tam - 2:], "big"):
+        print("  El CRC del sector no cuadra. No se toca nada.")
+        return
+
+    # Qué efectos declara el ratón. Si no lo dice, se prueban los conocidos.
+    candidatos: list[int] = []
+    if s.tiene(0x8071):
+        gen = s.llamar(0x8071, 0x00, b"\xff\xff\x00")
+        if gen and len(gen) > 2 and gen[2]:
+            z0 = s.llamar(0x8071, 0x00, b"\x00\xff\x00")
+            n = z0[4] if z0 and len(z0) > 4 else 0
+            for i in range(min(n, 16)):
+                r_ = s.llamar(0x8071, 0x00, bytes([0, i, 0]))
+                if r_ and len(r_) > 3:
+                    candidatos.append(int.from_bytes(r_[2:4], "big"))
+    if not candidatos:
+        candidatos = sorted(EFECTOS)
+
+    with open(ruta_copia, "wb") as fh:
+        fh.write(original)
+
+    print(f"  Copia del perfil guardada en {ruta_copia}")
+    print(f"  Se van a probar {len(candidatos)} efectos, uno a uno.")
+    print("  Al terminar, el perfil vuelve a como estaba ahora mismo.")
+    print()
+    print("  Mira la luz del ratón y describe lo que veas con tus palabras:")
+    print('  "arcoíris que se mueve", "azul fijo", "apagado", "respira"...')
+    print()
+    try:
+        input("  Enter para empezar, o Ctrl-C para dejarlo: ")
+    except (KeyboardInterrupt, EOFError):
+        print("\n  Cancelado. No se ha escrito nada.")
+        return
+
+    respuestas: list[tuple[str, str]] = []
+    try:
+        # Primero el color fijo en rojo puro: si la luz se pone roja, quedan
+        # confirmados de golpe el identificador y dónde van los bytes de color.
+        pruebas: list[tuple[bytes, str]] = [
+            (bytes([0x01, 0xFF, 0x00, 0x00]) + bytes(7), "0x01 con FF 00 00 (¿rojo fijo?)"),
+            (bytes([0x01, 0x00, 0x00, 0xFF]) + bytes(7), "0x01 con 00 00 FF (¿azul fijo?)"),
+        ]
+        for ident in candidatos:
+            if ident == 0x01:
+                continue            # ya va arriba, con color
+            pruebas.append((bytes([ident]) + bytes(10), f"0x{ident:02X}"))
+
+        for bloque, etiqueta in pruebas:
+            if not _escribir_efecto(s, sector, original, bloque, tam):
+                print(f"     {etiqueta}: no se pudo escribir, se salta")
+                continue
+            print(f"\n  --- {etiqueta} ---")
+            try:
+                visto = input("     ¿Qué ves? ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\n  Cortado por el usuario.")
+                break
+            respuestas.append((etiqueta, visto or "(sin respuesta)"))
+    finally:
+        print("\n  Devolviendo el perfil a como estaba...")
+        try:
+            escribir_sector(s, sector, original)
+            vuelto = leer_sector(s, sector, tam)
+            if vuelto == original:
+                print("  Restaurado y comprobado: el sector es idéntico al de antes.")
+            else:
+                print(f"  ⚠ No coincide con el original. Restaura a mano con:")
+                print(f"     sudo python3 depurar.py --restaurar {ruta_copia} "
+                      f"--sector {sector}")
+        except (HidppError, NoResponse, OSError) as e:
+            print(f"  ⚠ No se pudo restaurar ({e}). Hazlo con:")
+            print(f"     sudo python3 depurar.py --restaurar {ruta_copia} "
+                  f"--sector {sector}")
+
+    if respuestas:
+        print("\n" + "=" * 72)
+        print("  RESULTADO — esto es lo que hay que mandar:")
+        print("=" * 72)
+        for etiqueta, visto in respuestas:
+            print(f"  {etiqueta:<34} → {visto}")
+
+
+def _escribir_efecto(s: Sonda, sector: int, original: bytes,
+                     bloque: bytes, tam: int) -> bool:
+    """Mete un bloque de efecto en los dos huecos del perfil y lo escribe.
+
+    Se escriben los dos: el ratón guarda dos bloques y no sabemos cuál manda,
+    así que poner el mismo en ambos evita quedarnos mirando una luz que no
+    cambia por haber escrito en el que no era.
+    """
+    cuerpo = bytearray(original[:tam - 2])
+    for hueco in (208, 219):
+        if hueco + 11 <= len(cuerpo):
+            cuerpo[hueco:hueco + 11] = bloque
+    nuevo = bytes(cuerpo) + crc16_ccitt(bytes(cuerpo)).to_bytes(2, "big")
+    try:
+        escribir_sector(s, sector, nuevo)
+    except (HidppError, NoResponse, OSError):
+        return False
+    # El ratón puede contestar "sin error" y no haber hecho nada: se relee.
+    return leer_sector(s, sector, tam) == nuevo
+
+
 def bloque_cambiar_boton(s: Sonda, sector: int, numero: int, accion: str,
                          ruta_copia: str, forzar: bool) -> None:
     """Cambia un botón del perfil onboard. Escribe en el ratón.
@@ -1917,6 +2044,9 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--probar-efectos", action="store_true",
+                    help="prueba guiada: escribe cada efecto de luz y pregunta "
+                         "qué se ve. Restaura el perfil al terminar")
     ap.add_argument("--leds", action="store_true",
                     help="vuelca lo que el ratón diga de su iluminación")
     ap.add_argument("--informe", nargs="?", const="gpx2-informe.txt",
@@ -1987,6 +2117,9 @@ def main() -> int:
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
 
+    if args.probar_efectos:
+        bloque_probar_efectos(s, args.sector_perfil, args.copia)
+        return
     if args.leds:
         bloque_leds(s)
         ch.close()

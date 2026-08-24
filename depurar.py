@@ -299,7 +299,8 @@ def bloque_tasa(s: Sonda) -> None:
         print(f"      → índice {idx} = {actual} Hz")
 
 
-def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None) -> None:
+def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None,
+                          restaurar: bool = True) -> None:
     """Escribe la tasa de reporte con f3 y verifica leyendo con f2.
 
     Prueba varios formatos y comprueba el resultado DESPUÉS DE CADA UNO: en
@@ -394,6 +395,13 @@ def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None) -> None:
               "que\n       la tasa la fije el enlace inalámbrico y no se pueda "
               "tocar por\n       receptor. Contrástalo con Solaar (ver más abajo).")
 
+    if not restaurar:
+        print("\n  --sin-restaurar: la tasa se queda escrita.")
+        print("  Apaga el ratón, enciéndelo, y vuelve a lanzar esto SIN")
+        print("  --escribir. Si entonces f2 dice algo distinto de la tasa de")
+        print("  partida, la escritura sí valía y sólo faltaba rehacer el enlace.")
+        return
+
     print(f"\n  Restaurando la tasa original (índice {idx_original} = "
           f"{MAPEO_HZ[idx_original] if idx_original < 7 else '?'} Hz)…")
     try:
@@ -418,6 +426,9 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--sin-restaurar", action="store_true",
+                    help="deja la tasa escrita, para comprobar si surte efecto "
+                         "tras apagar y encender el ratón")
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
@@ -449,7 +460,7 @@ def main() -> int:
         bloque_escritura_dpi(s, estado, validos, args.dpi)
 
     if args.escribir and s.tiene(0x8061):
-        bloque_escritura_tasa(s, args.hz)
+        bloque_escritura_tasa(s, args.hz, not args.sin_restaurar)
 
     print("\n")
     ch.close()

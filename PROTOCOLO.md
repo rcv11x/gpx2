@@ -179,9 +179,19 @@ función 1 declara ahí. **A Solaar le pasa lo mismo**:
 `1ms`. Sin resolver.
 
 Queda un cabo suelto interesante: en Windows **sí** se consiguen 8000 Hz de
-forma inalámbrica. Así que se puede; falta averiguar por dónde. La sospecha es
-que haya que configurar el **receptor**, no el ratón, y el receptor habla
-HID++ 1.0 por registros, no features.
+forma inalámbrica. Así que se puede; falta averiguar por dónde. Dos hipótesis
+sin probar, en orden de lo barato que sale comprobarlas:
+
+1. **La escritura se guarda pero sólo surte efecto al rehacer el enlace.** La
+   tasa inalámbrica es una propiedad del enlace, y nosotros releemos al
+   instante, cuando todavía está el anterior. Se comprueba con
+   `depurar.py --escribir --solo-tasa --sin-restaurar`, apagando y encendiendo
+   el ratón después, y mirando qué dice entonces la función 2.
+2. **Hay que configurar el receptor, no el ratón.** El receptor habla HID++ 1.0
+   por registros, no por features, así que sería otro camino entero.
+
+Si acierta la primera, `set()` no puede seguir lanzando `EscrituraIgnorada` al
+releer de inmediato: tendría que decir que el cambio se aplicará al reconectar.
 
 Por eso `ExtendedReportRate.set()` **relee y lanza `EscrituraIgnorada`** si el
 valor no cambió: sin eso, la interfaz enseñaría una tasa que el ratón no tiene.

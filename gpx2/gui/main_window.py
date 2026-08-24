@@ -143,7 +143,7 @@ class PaginaVacia(QWidget):
         self.detalle.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        boton = QPushButton("Buscar de nuevo")
+        boton = QPushButton("Volver a escanear")
         boton.clicked.connect(al_reescanear)
         fila = QHBoxLayout()
         fila.addStretch(1)
@@ -347,6 +347,8 @@ class PaginaRaton(QWidget):
         # ahora. Tenerlas en pestañas distintas obligaba a saltar entre dos
         # pantallas para lo mismo.
         tarjetas.append(self._tarjeta_tasa())
+        # El aviso va después de las dos tarjetas porque habla de las dos.
+        tarjetas.append(self._tarjeta_guardar())
         if self.raton.onboard is None:
             tarjetas.append(Tarjeta(
                 "Modo de funcionamiento",
@@ -413,17 +415,6 @@ class PaginaRaton(QWidget):
         pie.setObjectName("Suave")
         t.añadir(pie)
 
-        # Lo que se toca aquí cambia el ratón al momento, pero NO el perfil.
-        # Sin decirlo, uno mueve el deslizador, luego se aplica un perfil y no
-        # entiende por qué se ha perdido su ajuste.
-        self.lbl_desfase = QLabel()
-        self.lbl_desfase.setObjectName("Suave")
-        self.lbl_desfase.setWordWrap(True)
-        t.añadir(self.lbl_desfase)
-        self.btn_guardar_perfil = QPushButton()
-        self.btn_guardar_perfil.setIcon(icono("document-save"))
-        self.btn_guardar_perfil.clicked.connect(self._guardar_en_perfil)
-        t.añadir(_suelto(self.btn_guardar_perfil))
         self._refrescar_desfase()
         self._marcar_nivel(dpi.actual)
         return t
@@ -477,6 +468,29 @@ class PaginaRaton(QWidget):
             self._slider_dpi.poner(valor)
         self._set_dpi(valor)
 
+    def _tarjeta_guardar(self) -> Tarjeta:
+        """Lo que se toca arriba cambia el ratón al momento, pero no el perfil.
+
+        Sin decirlo, uno ajusta algo, se aplica un perfil y no entiende por qué
+        se ha perdido lo que había puesto.
+        """
+        t = Tarjeta("Estos ajustes y tu perfil",
+                    "Lo que cambias arriba se aplica al ratón al momento, pero "
+                    "no se guarda solo: cuando se aplique un perfil, volverá a "
+                    "lo que ese perfil tenga.")
+        self.lbl_desfase = QLabel()
+        self.lbl_desfase.setWordWrap(True)
+        t.añadir(self.lbl_desfase)
+        self.btn_guardar_perfil = QPushButton()
+        self.btn_guardar_perfil.setIcon(icono("document-save"))
+        self.btn_guardar_perfil.clicked.connect(self._guardar_en_perfil)
+        self.btn_guardar_perfil.setVisible(False)
+        t.añadir(_suelto(self.btn_guardar_perfil))
+        # Se refresca aquí, no en la tarjeta de arriba: allí estas etiquetas
+        # todavía no existen y la tarjeta salía en blanco.
+        self._refrescar_desfase()
+        return t
+
     def _tarjeta_kde(self) -> Tarjeta:
         t = Tarjeta("Velocidad del puntero en el escritorio",
                     "Este ajuste no es del ratón: es de Plasma, y se aplica "
@@ -486,7 +500,8 @@ class PaginaRaton(QWidget):
                     "recorres siempre la misma distancia con el mismo "
                     "movimiento de la mano, muevas rápido o despacio.")
         if self.puntero_kde is None:
-            t.añadir(QLabel("KWin no expone este dispositivo como puntero."))
+            t.añadir(QLabel("Plasma no lista este ratón entre sus punteros, así que su "
+                           "velocidad no se puede ajustar desde aquí."))
             return t
         info = self.puntero_kde.info()
         fila = FilaSlider("Velocidad", -1.0, 1.0, 0.05, decimales=2)
@@ -504,9 +519,10 @@ class PaginaRaton(QWidget):
         rate = self.estado.get("rate")
         if rate:
             cap = self.raton.rate
-            t = Tarjeta("Tasa de reporte",
-                        "Veces por segundo que el ratón informa de dónde está. "
-                        "Más alta significa menos retraso, y algo menos de batería.")
+            t = Tarjeta("Frecuencia de sondeo",
+                        "Veces por segundo que el ratón informa de dónde está — "
+                        "lo que se suele llamar «polling rate». Más alta "
+                        "significa menos retraso, y algo menos de batería.")
             combo = QComboBox()
             for hz in rate.disponibles:
                 combo.addItem(f"{hz} Hz", hz)
@@ -524,9 +540,10 @@ class PaginaRaton(QWidget):
             # El ratón no informa de la tasa que tiene puesta: su función de
             # lectura sigue devolviendo la anterior. Se enseña lo último que
             # hemos escrito, y se dice cómo comprobarlo de verdad.
-            nota = QLabel("El ratón no informa de la tasa que tiene puesta, así "
-                          "que aquí se muestra la última que se le ha pedido. "
-                          "Para medir la real: python3 depurar.py --medir")
+            nota = QLabel("El ratón no informa de la frecuencia que tiene puesta, "
+                          "así que aquí se muestra la última que se le ha "
+                          "pedido. Para medir la de verdad: "
+                          "python3 depurar.py --medir")
             nota.setObjectName("Suave")
             nota.setWordWrap(True)
             t.añadir(nota)
@@ -535,8 +552,8 @@ class PaginaRaton(QWidget):
             self._combo_rate = combo
             t.añadir(combo)
         else:
-            t = Tarjeta("Tasa de reporte",
-                        "Este ratón no permite ajustar la tasa de reporte.")
+            t = Tarjeta("Frecuencia de sondeo",
+                        "Este ratón no permite ajustarla.")
 
         return t
 
@@ -561,7 +578,8 @@ class PaginaRaton(QWidget):
         cabecera = Tarjeta(
             "Memoria del ratón",
             "Tu ratón guarda dentro sus propios ajustes: la sensibilidad, la "
-            "tasa de reporte y lo que hace cada botón. Eso sobrevive a apagarlo "
+            "frecuencia de sondeo y lo que hace cada botón. Eso sobrevive "
+            "a apagarlo "
             "y funciona en cualquier ordenador, sin este programa ni ningún otro.")
 
         try:
@@ -757,7 +775,7 @@ class PaginaRaton(QWidget):
                 f"El perfil «{perfil.nombre}» tiene guardado "
                 f"{' y '.join(difieren)}. Esto que has puesto vale hasta que se "
                 "aplique un perfil.")
-            boton.setText(f"Guardar esto en «{perfil.nombre}»")
+            boton.setText(f"Guardar en «{perfil.nombre}»")
             boton.setVisible(True)
         etiqueta.setVisible(True)
 
@@ -1085,7 +1103,7 @@ class PaginaRaton(QWidget):
         tabla.setMinimumHeight(260)
         t.añadir(tabla)
 
-        t2 = Tarjeta("Volcado en crudo",
+        t2 = Tarjeta("Respuestas del ratón, sin interpretar",
                      "Para las features aún sin validar (0x2202, 0x8061), esto "
                      "muestra la respuesta byte a byte. Es la herramienta con la "
                      "que se corrige el decodificador sin adivinar nada.")
@@ -1095,13 +1113,13 @@ class PaginaRaton(QWidget):
         fuente = QFont("monospace")
         fuente.setStyleHint(QFont.StyleHint.Monospace)
         salida.setFont(fuente)
-        boton = QPushButton("Volcar respuestas en crudo")
+        boton = QPushButton("Preguntar al ratón y volcar lo que conteste")
         boton.clicked.connect(lambda: salida.setPlainText(self._volcado()))
         t2.añadir(boton)
         t2.añadir(salida)
 
         if self.estado.get("errores") or self.estado.get("fallos"):
-            t3 = Tarjeta("Incidencias durante la lectura")
+            t3 = Tarjeta("Fallos al leer el ratón")
             for e in self.estado.get("errores", []):
                 t3.añadir(QLabel(f"• {e}"))
             for k, v in (self.estado.get("fallos") or {}).items():
@@ -1199,7 +1217,7 @@ class PaginaRaton(QWidget):
                 "ratón la aceptó, pero mantiene su tasa.")
             self._resincronizar_rate()
         except Exception as e:
-            QMessageBox.warning(self, "No se pudo cambiar la tasa de reporte",
+            QMessageBox.warning(self, "No se pudo cambiar la frecuencia",
                                 self._explicar(e))
             self._resincronizar_rate()
         self._refrescar_desfase()

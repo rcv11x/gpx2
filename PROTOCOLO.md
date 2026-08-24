@@ -318,8 +318,14 @@ el 4): así se ejercita el mecanismo entero sin que un fallo afecte a nada que
 el ratón use. `depurar.py --probar-escritura` hace eso, guardando antes una
 copia del sector en un fichero por si hay que restaurarlo.
 
-**Comprobado en el PRO X 2**: el sector 2 se reescribió con sus propios bytes y
-volvió idéntico. El mecanismo y el CRC son correctos.
+**Comprobado en el PRO X 2**, en dos pasos:
+
+1. El sector 2 (un perfil deshabilitado) se reescribió con sus propios bytes y
+   volvió idéntico. El mecanismo y el CRC son correctos.
+2. Se cambió el botón 3 del perfil activo de «atrás» a «clic central»
+   (`80 01 00 08` → `80 01 00 04` en el byte 60, más el CRC nuevo), se pasó el
+   ratón a modo onboard, y **el botón lateral pasó a pegar el portapapeles**.
+   Escribir perfiles onboard funciona.
 
 > **El perfil onboard sólo manda en modo onboard.** Cambiar un botón en el
 > perfil no se nota mientras el ratón esté en modo host, que es donde lo pone

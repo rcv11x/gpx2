@@ -424,6 +424,10 @@ class OnboardProfiles(Capability):
     F_ESCRIBIR_MODO, F_LEER_MODO = 0x01, 0x02
     ONBOARD, HOST = 0x01, 0x02
 
+    def __init__(self, hpp):
+        super().__init__(hpp)
+        self._cache_info: bytes | None = None
+
     def info(self) -> bytes:
         return self.call(0x00)
 
@@ -440,6 +444,84 @@ class OnboardProfiles(Capability):
 
     def get(self) -> str:
         return "host (manda el PC)" if self.es_host() else "onboard (manda el ratón)"
+
+    # -- memoria de perfiles --------------------------------------------------
+    #
+    # Lo que se escribe aquí sobrevive a apagar el ratón y funciona sin
+    # software en cualquier ordenador. Ver `gpx2/onboard.py` y PROTOCOLO.md.
+
+    F_LEER_MEM, F_ABRIR_ESCRITURA, F_TROZO, F_CERRAR = 0x05, 0x06, 0x07, 0x08
+
+    def _info(self) -> bytes:
+        if self._cache_info is None:
+            self._cache_info = self.call(0x00)
+        return self._cache_info
+
+    @property
+    def num_perfiles(self) -> int:
+        return self._info()[3]
+
+    @property
+    def num_botones(self) -> int:
+        return self._info()[5]
+
+    @property
+    def tam_sector(self) -> int:
+        return int.from_bytes(self._info()[7:9], "big")
+
+    @property
+    def formato(self) -> int:
+        return self._info()[1]
+
+    def cabeceras(self) -> list[tuple[int, bool]]:
+        """El directorio de perfiles: [(sector, habilitado), …]."""
+        salida = []
+        for base in (0, 1):                 # si el sector 0 está vacío, la ROM
+            crudo = self.leer_sector(base, 16)
+            if crudo is None:
+                continue
+            for i in range(0, 16, 4):
+                sector = int.from_bytes(crudo[i:i + 2], "big")
+                if sector in (0x0000, 0xFFFF):
+                    break
+                salida.append((sector, bool(crudo[i + 2])))
+            if salida:
+                break
+        return salida
+
+    def leer_sector(self, sector: int, tam: int | None = None) -> bytes | None:
+        """Lee un sector entero.
+
+        Cada petición devuelve 16 bytes y el tamaño de sector no es múltiplo de
+        16, así que el último bloque se pide solapado desde el final: pedirlo
+        en su sitio se saldría del sector y la petición falla.
+        """
+        tam = tam or self.tam_sector
+        datos, desp = b"", 0
+        try:
+            while desp <= tam - 16:
+                datos += self.call(self.F_LEER_MEM,
+                                   bytes([sector >> 8, sector & 0xFF,
+                                          desp >> 8, desp & 0xFF]))
+                desp += 16
+            if len(datos) < tam and tam % 16:
+                cola = self.call(self.F_LEER_MEM,
+                                 bytes([sector >> 8, sector & 0xFF,
+                                        (tam - 16) >> 8, (tam - 16) & 0xFF]))
+                datos += cola[16 - tam % 16:]
+        except (HidppError, NoResponse, OSError):
+            return None
+        return datos[:tam]
+
+    def escribir_sector(self, sector: int, datos: bytes) -> None:
+        """Escribe un sector completo: abrir, mandar trozos, cerrar."""
+        tam = len(datos)
+        self.call(self.F_ABRIR_ESCRITURA,
+                  bytes([sector >> 8, sector & 0xFF, 0, 0,
+                         tam >> 8, tam & 0xFF]))
+        for desp in range(0, tam, 16):
+            self.call(self.F_TROZO, datos[desp:desp + 16])
+        self.call(self.F_CERRAR)
 
 
 # ---------------------------------------------------------------------------

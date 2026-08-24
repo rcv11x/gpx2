@@ -47,6 +47,29 @@ RANGOS_PAGINAS = [
     bytes(13),
 ]
 
+# El sector del perfil 1, copia literal del volcado del PRO X 2 (2026-08-24).
+# El directorio (sector 0) apunta a cuatro perfiles; sólo el primero está
+# habilitado, y los otros tres son copias suyas.
+SECTOR_PERFIL = bytes.fromhex(
+    "030300002003200302b004b004024006"
+    "4006026009600902800c800c02000000"
+    "00ff00ffffffffffffffffff3c002c01"
+    "80010001800100028001000480010008"
+    "80010010ffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "ffffffffffffffffffffffffffffffff"
+    "0300000000001f400000000300000000"
+    "001f400000000300000000001f403200"
+    "000300000000001f403200000384db"
+)
+DIRECTORIO = bytes.fromhex("00010100" "00020000" "00030000" "00040000")
+
 # Los cinco DPI del perfil onboard y su distancia de despegue (0x2202 f3 y f4).
 DPI_NIVELES = [800, 1200, 1600, 2400, 3200]
 
@@ -77,6 +100,8 @@ class CanalSimulado:
         self.indices = {fid: i for i, fid in enumerate(TABLA)}
         self.remapeos: dict[int, int] = {}
         self.modo_onboard = 0x01        # arranca en onboard, como el real
+        self.sectores: dict[int, bytes] = {}
+        self._escribiendo: tuple[int, bytes] = (0, b"")
 
     # -- contrato de RawChannel ----------------------------------------------
 
@@ -232,6 +257,33 @@ class CanalSimulado:
                 return b"\x00"
             if func == 0x02:                                # getOnboardMode
                 return bytes([self.modo_onboard])
+            if func == 0x04:                                # getActiveProfile
+                return b"\x00\x00\x00\x00"
+            if func == 0x05:                                # leer memoria
+                sector = int.from_bytes(params[0:2], "big")
+                desp = int.from_bytes(params[2:4], "big")
+                if sector == 0:
+                    origen = DIRECTORIO.ljust(255, b"\x00")
+                else:
+                    origen = self.sectores.get(sector, SECTOR_PERFIL)
+                return origen[desp:desp + 16].ljust(16, b"\x00")
+            if func == 0x06:                                # abrir escritura
+                self._escribiendo = (int.from_bytes(params[0:2], "big"), b"")
+                return b"\x00"
+            if func == 0x07:                                # trozo
+                sector, buf = self._escribiendo
+                self._escribiendo = (sector, buf + params)
+                return b"\x00"
+            if func == 0x08:                                # cerrar
+                sector, buf = self._escribiendo
+                # El ratón comprueba el CRC: un sector mal cerrado se rechaza.
+                from .onboard import crc16_ccitt
+                if len(buf) >= 2 and crc16_ccitt(buf[:-2]) == int.from_bytes(buf[-2:], "big"):
+                    self.sectores[sector] = bytes(buf)
+                    self._escribiendo = (0, b"")
+                    return b"\x00"
+                self._escribiendo = (0, b"")
+                raise KeyError((fid, func))     # error: CRC incorrecto
 
         raise KeyError((fid, func))
 

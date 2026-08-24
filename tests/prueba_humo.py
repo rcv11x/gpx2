@@ -124,7 +124,40 @@ def main() -> int:
         comprobar("report_rate_hz" in motor.imposibles, "y lo recuerda")
         comprobar(motor.aplicar(otro) == [], "no lo reintenta sin parar")
 
-    print("6. Robustez")
+    print("6. Perfiles en la memoria del ratón (0x8100, formato 0x07)")
+    from gpx2.onboard import (ACCIONES, crc16_ccitt, describir_boton,
+                              escribir_perfil, leer_perfil)
+    # Vector canónico del CRC-16/CCITT-FALSE. Si esto falla, cualquier sector
+    # que escribiéramos lo rechazaría el ratón.
+    comprobar(crc16_ccitt(b"123456789") == 0x29B1, "el CRC es el que espera el ratón")
+
+    ob = raton.onboard
+    comprobar(ob.formato == 0x07, "lee el formato de perfil")
+    comprobar(ob.cabeceras()[0] == (1, True), "lee el directorio de perfiles")
+    crudo = ob.leer_sector(1)
+    comprobar(crudo is not None and len(crudo) == ob.tam_sector,
+              "lee el sector entero, con su último trozo solapado")
+    comprobar(crc16_ccitt(crudo[:-2]) == int.from_bytes(crudo[-2:], "big"),
+              "y su CRC cuadra")
+
+    perfil = leer_perfil(crudo, ob.num_botones)
+    comprobar(perfil.tasa_hz == 1000, "decodifica la tasa guardada")
+    comprobar([n.x for n in perfil.niveles] == [800, 1200, 1600, 2400, 3200],
+              "decodifica los cinco niveles de DPI")
+    comprobar(describir_boton(perfil.botones[3]) == "Atrás", "decodifica los botones")
+    # Del sector hay campos que no entendemos: reescribirlo sin cambios no
+    # puede alterar ni un byte, o los estaríamos inventando.
+    comprobar(escribir_perfil(perfil) == crudo, "ida y vuelta sin tocar nada")
+
+    perfil.botones[3] = ACCIONES["Clic central"]
+    perfil.niveles[1].x = perfil.niveles[1].y = 1500
+    ob.escribir_sector(1, escribir_perfil(perfil))
+    releido = leer_perfil(ob.leer_sector(1), ob.num_botones)
+    comprobar(describir_boton(releido.botones[3]) == "Clic central",
+              "escribe un botón en la memoria del ratón")
+    comprobar(releido.niveles[1].x == 1500, "y un nivel de DPI")
+
+    print("7. Robustez")
     from gpx2.features import Firmware
     fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)
     # Sin el espacio se lee "BL171.00", como si la versión fuera la 171.
@@ -133,7 +166,7 @@ def main() -> int:
     from gpx2.transport import enumerate_nodes
     comprobar(isinstance(enumerate_nodes(), list), "la enumeración no lanza")
 
-    print("7. Botones reprogramables (0x1B04)")
+    print("8. Botones reprogramables (0x1B04)")
     botones = raton.buttons
     comprobar(botones is not None, "el ratón declara la feature de botones")
     controles = botones.controls()

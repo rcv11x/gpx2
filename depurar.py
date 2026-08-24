@@ -375,6 +375,73 @@ def medir_tasa(dispositivo: str, segundos: float = 5.0) -> None:
     print(f"\n     → la tasa real es {cerca} Hz")
 
 
+# Códigos de botón del kernel (linux/input-event-codes.h).
+EV_KEY = 0x01
+BOTONES_KERNEL = {
+    0x110: "BTN_LEFT (clic izquierdo)", 0x111: "BTN_RIGHT (clic derecho)",
+    0x112: "BTN_MIDDLE (clic central)", 0x113: "BTN_SIDE (lateral trasero)",
+    0x114: "BTN_EXTRA (lateral delantero)", 0x115: "BTN_FORWARD",
+    0x116: "BTN_BACK", 0x117: "BTN_TASK",
+}
+
+
+def escuchar_botones(dispositivo: str, segundos: float = 20.0) -> None:
+    """Enseña qué botones llegan al kernel, tal cual los manda el ratón.
+
+    Es la forma de separar tres cosas que se confunden: que el ratón no mande
+    nada, que mande un botón distinto del que crees, o que lo mande bien y sea
+    el escritorio quien hace algo raro con él.
+    """
+    print(f"\n  Escuchando {dispositivo} durante {segundos:.0f} s.")
+    print("  *** PULSA LOS BOTONES DEL RATÓN, UNO A UNO ***\n")
+    try:
+        fd = os.open(dispositivo, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError as e:
+        print(f"     no se pudo abrir: {e}")
+        return
+
+    cuenta: dict[int, int] = {}
+    fin = time.monotonic() + segundos
+    try:
+        while time.monotonic() < fin:
+            resto = fin - time.monotonic()
+            if not select.select([fd], [], [], min(0.3, max(0.0, resto)))[0]:
+                continue
+            try:
+                datos = os.read(fd, TAM_EVENTO * 64)
+            except BlockingIOError:
+                continue
+            for i in range(0, len(datos) - TAM_EVENTO + 1, TAM_EVENTO):
+                _, _, tipo, codigo, valor = struct.unpack(
+                    FORMATO_EVENTO, datos[i:i + TAM_EVENTO])
+                if tipo != EV_KEY or valor != 1:      # sólo al pulsar
+                    continue
+                cuenta[codigo] = cuenta.get(codigo, 0) + 1
+                nombre = BOTONES_KERNEL.get(codigo, f"código 0x{codigo:03X}")
+                print(f"     pulsado: {nombre}")
+    finally:
+        os.close(fd)
+
+    if not cuenta:
+        print("\n     No llegó ninguna pulsación.")
+        print("     Si estabas pulsando, el ratón no las está mandando por aquí.")
+        return
+    print("\n     Resumen:")
+    for codigo, veces in sorted(cuenta.items()):
+        print(f"       {BOTONES_KERNEL.get(codigo, hex(codigo)):32} x{veces}")
+
+
+def bloque_escuchar(segundos: float) -> None:
+    titulo("QUÉ BOTONES LLEGAN AL KERNEL")
+    punteros = punteros_del_sistema()
+    if not punteros:
+        print("  No se encontró ningún puntero en /dev/input.")
+        return
+    elegido = next((p for p in punteros if p[2].startswith("046d")), punteros[0])
+    print(f"  Escuchando: {elegido[1]}  ({elegido[0]})")
+    escuchar_botones(elegido[0], segundos)
+
+
 def bloque_medir(segundos: float) -> None:
     titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
     punteros = punteros_del_sistema()
@@ -1135,6 +1202,9 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--botones-en-vivo", nargs="?", const=20.0, type=float,
+                    metavar="SEGUNDOS",
+                    help="enseña qué botones recibe el kernel al pulsarlos")
     ap.add_argument("--medir", nargs="?", const=5.0, type=float,
                     metavar="SEGUNDOS",
                     help="mide la tasa de reporte real moviendo el ratón")
@@ -1147,6 +1217,10 @@ def main() -> int:
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
+
+    if args.botones_en_vivo:
+        bloque_escuchar(args.botones_en_vivo)
+        return 0
 
     if args.medir:
         bloque_medir(args.medir)

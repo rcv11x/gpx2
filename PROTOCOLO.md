@@ -178,47 +178,29 @@ función 1 declara ahí. **A Solaar le pasa lo mismo**:
 —que hace con `read(cached=False)`, contra el dispositivo— sigue devolviendo
 `1ms`. Sin resolver.
 
-Queda un cabo suelto interesante: en Windows **sí** se consiguen 8000 Hz de
-forma inalámbrica. Así que se puede; falta averiguar por dónde. Dos hipótesis
-sin probar, en orden de lo barato que sale comprobarlas:
+### Conclusión: el tope lo pone el receptor
 
-1. ~~La escritura se guarda y surte efecto al rehacer el enlace.~~
-   **Descartada.** Se escribieron 4000 Hz sin restaurar, se apagó y encendió el
-   ratón, y la función 2 seguía devolviendo el índice 3 (1000 Hz). La orden no
-   se guarda en ninguna parte.
-2. **La tasa la manda el perfil onboard.** Su primer byte es la tasa de reporte
-   como índice, y vale 3 — los mismos 1000 Hz a los que está el ratón. Que
-   escribir por `0x8061` en modo host no haga nada encaja con que el enlace la
-   coja de ahí.
+Medida la tasa real con `depurar.py --medir`, que cronometra los informes que
+llegan al kernel y no le pregunta nada al ratón: **1000 Hz exactos**. 4484
+intervalos con mediana de 1,000 ms y el más corto en 0,998. No hay ambigüedad.
 
-   Probado escribir la tasa **estando en modo onboard**: el ratón responde
-   entonces **error 0x02** en vez de aceptarla en silencio. Y no es por el
-   valor — el índice 2 (500 Hz), que está en todas las listas, da el mismo
-   error. En modo onboard sencillamente no deja escribir la tasa. La lista de
-   la función 1 tampoco se encoge: sigue en `0x7f`.
+Junto todo:
 
-   Resumen de las tres situaciones probadas:
+- el ratón declara `0x7f` sin cable, o sea que **él** sabe llegar a 8000;
+- escribir la tasa por receptor se acepta sin error y no cambia nada;
+- en modo host los perfiles onboard están desactivados, así que el perfil no
+  puede ser quien lo impide;
+- el enlace va a la velocidad que puedan los dos extremos.
 
-   | Estado | Escritura de la tasa |
-   |---|---|
-   | cable + host | **funciona**, hasta 1000 Hz |
-   | receptor + host | acepta sin error y no aplica |
-   | receptor + onboard | rechaza siempre con 0x02 |
+La explicación que no necesita inventar nada es que **el receptor tope a
+1000 Hz**. Los 8K de estos ratones necesitan un receptor específico; el que
+viene en la caja no lo es. Si eso es así, no hay nada que el software pueda
+hacer: no es una feature que nos falte implementar.
 
-   Lo que queda es **escribir el perfil en memoria** (función 6 de `0x8100`):
-   leer el sector entero, cambiar el primer byte, recalcular el CRC16 y
-   reescribirlo. Es lo que hace G HUB en Windows. No toca firmware, así que no
-   puede dejar el ratón inservible, pero sí corromper sus perfiles; haría falta
-   guardar antes una copia del sector y tener a mano `0x1802` (reinicio).
-3. **El límite lo pone el receptor, no el ratón.** `f0(1)` dice lo que el
-   *ratón* admite sin cable, pero el enlace va a la velocidad que puedan los
-   dos. Si el receptor tope a 1000 Hz, encaja con todo lo visto: el ratón
-   acepta la orden y el enlace no cambia. Comprobarlo exigiría hablar con el
-   receptor, que usa HID++ 1.0 por registros y es otro camino entero.
-
-De paso quedó claro que **apagar el ratón con su interruptor NO le hace perder
-el modo host ni el DPI**: tras el ciclo seguía en host y a 1200. Lo que sí los
-pierde es desenchufar el receptor.
+Queda sin confirmar del todo porque haría falta o un receptor de 8K, o
+contrastar contra Windows. **No merece más tiempo**: es un límite del hardware,
+no una tarea pendiente. Si algún día aparece un receptor de 8K, `--medir` da la
+respuesta en cinco segundos.
 
 Por eso `ExtendedReportRate.set()` **relee y lanza `EscrituraIgnorada`** si el
 valor no cambió: sin eso, la interfaz enseñaría una tasa que el ratón no tiene.

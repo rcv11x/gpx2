@@ -391,6 +391,69 @@ def bloque_medir(segundos: float) -> None:
     medir_tasa(elegido[0], segundos)
 
 
+def crc16_ccitt(datos: bytes) -> int:
+    """CRC-16/CCITT-FALSE: polinomio 0x1021, inicio 0xFFFF, sin reflejar.
+
+    Es el que cierra cada sector de perfil. Calcularlo bien es el requisito
+    para poder escribir: un sector con el CRC mal lo rechaza el ratón, o peor,
+    lo acepta y queda corrupto.
+    """
+    crc = 0xFFFF
+    for byte in datos:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+# Un botón ocupa 4 bytes. El nibble alto del primero es el comportamiento.
+COMPORTAMIENTOS = {0x0: "ejecutar macro", 0x1: "parar macro",
+                   0x2: "parar todas las macros", 0x8: "enviar", 0x9: "función"}
+TIPOS_ENVIO = {0x0: "nada", 0x1: "botón", 0x2: "modificador+tecla",
+               0x3: "tecla multimedia"}
+BOTONES_RATON = {0x0001: "clic izquierdo", 0x0002: "clic derecho",
+                 0x0004: "clic central", 0x0008: "atrás", 0x0010: "adelante"}
+FUNCIONES = {0x00: "ninguna", 0x01: "inclinar izquierda", 0x02: "inclinar derecha",
+             0x03: "DPI siguiente", 0x04: "DPI anterior", 0x05: "ciclar DPI",
+             0x06: "DPI por defecto", 0x07: "DPI temporal", 0x08: "perfil siguiente",
+             0x09: "perfil anterior", 0x0A: "ciclar perfil", 0x0B: "G-Shift",
+             0x0C: "estado de batería", 0x0D: "elegir perfil",
+             0x0E: "cambiar de modo", 0x0F: "cambiar de host",
+             0x10: "rueda abajo", 0x11: "rueda arriba"}
+
+
+def describir_boton(b: bytes) -> str:
+    """Traduce los 4 bytes de un botón a algo legible."""
+    comportamiento = b[0] >> 4
+    nombre = COMPORTAMIENTOS.get(comportamiento, f"0x{comportamiento:X}?")
+    if comportamiento == 0x8:                       # enviar
+        tipo = TIPOS_ENVIO.get(b[1], f"0x{b[1]:02X}?")
+        valor = (b[2] << 8) | b[3]
+        if b[1] == 0x01:
+            return f"{nombre} · {tipo}: {BOTONES_RATON.get(valor, f'0x{valor:04X}')}"
+        return f"{nombre} · {tipo}: 0x{valor:04X}"
+    if comportamiento == 0x9:                       # función interna
+        return f"{nombre}: {FUNCIONES.get(b[1], f'0x{b[1]:02X}?')}"
+    return nombre
+
+
+def buscar_botones(sector: bytes, cuantos: int) -> int | None:
+    """Localiza dónde empieza el bloque de botones dentro del sector.
+
+    En el formato 0x06 empiezan en el byte 32, pero el 0x07 mete cinco bytes
+    por nivel de DPI en vez de dos, así que la posición no tiene por qué ser la
+    misma. En vez de suponerla, se busca: un botón válido empieza por un nibble
+    de comportamiento conocido, y tiene que haber varios seguidos.
+    """
+    for inicio in range(0, len(sector) - cuantos * 4):
+        if all((sector[inicio + i * 4] >> 4) in COMPORTAMIENTOS
+               for i in range(cuantos)):
+            # Descartar rachas de ceros, que también encajarían.
+            if any(sector[inicio + i * 4] for i in range(cuantos)):
+                return inicio
+    return None
+
+
 def bloque_perfiles_onboard(s: Sonda) -> None:
     """Vuelca la memoria de perfiles del ratón. Sólo lee, no escribe nada.
 
@@ -455,22 +518,32 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
     for n, (sector, habilitado) in enumerate(cabeceras, start=1):
         print(f"\n  -- perfil {n}: sector 0x{sector:04X}"
               f"   {'activo' if habilitado else 'deshabilitado'} --")
+
+        # Del activo se lee el sector entero; de los demás basta la cabecera.
+        cuanto = tam if habilitado else 32
         crudo = b""
-        for desp in (0, 16):
+        for desp in range(0, cuanto, 16):
             trozo = leer(sector, desp)
             if trozo is None:
                 break
-            print(f"     +{desp:02d}  {hx(trozo)}")
             crudo += trozo
+        crudo = crudo[:cuanto]
         if len(crudo) < 16:
+            print("     no se pudo leer")
             continue
+
+        if habilitado:
+            for desp in range(0, len(crudo), 16):
+                print(f"     +{desp:03d}  {hx(crudo[desp:desp + 16])}")
+        else:
+            print(f"     +000  {hx(crudo[:16])}")
+            print(f"     +016  {hx(crudo[16:32])}")
+
         # Disposición del formato 0x07, deducida del volcado del PRO X 2. NO es
         # la del 0x06 que parsea Solaar: allí la tasa va en milisegundos y cada
         # nivel de DPI ocupa un u16; aquí la tasa es un ÍNDICE de la misma tabla
         # que usa 0x8061, y cada nivel lleva sus dos ejes y su distancia de
-        # despegue. Que b[0] valga lo mismo que devuelve 0x8061 f2, y que b[2]
-        # apunte al DPI que el ratón declara "de fábrica", es lo que confirma
-        # la lectura.
+        # despegue.
         MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
 
         def hz(i: int) -> str:
@@ -488,6 +561,37 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
             y = int.from_bytes(crudo[o + 2:o + 4], "little")
             marca = "  ← por defecto" if i == crudo[2] else ""
             print(f"     nivel {i}: X={x:>5}  Y={y:>5}  despegue={crudo[o + 4]}{marca}")
+
+        if not habilitado:
+            continue
+
+        # --- CRC: la prueba de que podríamos escribir bien -------------------
+        esperado = int.from_bytes(crudo[tam - 2:tam], "big")
+        calculado = crc16_ccitt(crudo[:tam - 2])
+        igual = esperado == calculado
+        print(f"\n     CRC del sector: el ratón dice 0x{esperado:04X}, "
+              f"nosotros calculamos 0x{calculado:04X}")
+        print(f"     → {'COINCIDE: sabríamos reescribir el sector' if igual else 'NO coincide: aún no sabemos calcularlo'}")
+
+        # --- botones ---------------------------------------------------------
+        inicio = buscar_botones(crudo, botones)
+        if inicio is None:
+            print("\n     no se ha encontrado un bloque de botones reconocible")
+            continue
+        print(f"\n     bloque de botones en el byte {inicio}:")
+        for i in range(botones):
+            b = crudo[inicio + i * 4:inicio + i * 4 + 4]
+            print(f"       botón {i}: {hx(b)}   {describir_boton(b)}")
+
+        # Tras los botones normales suelen ir los de G-Shift, otros tantos.
+        segundo = inicio + botones * 4
+        if segundo + botones * 4 <= len(crudo):
+            grupo = crudo[segundo:segundo + botones * 4]
+            if any(grupo):
+                print(f"\n     ¿botones de G-Shift? en el byte {segundo}:")
+                for i in range(botones):
+                    b = grupo[i * 4:i * 4 + 4]
+                    print(f"       botón {i}: {hx(b)}   {describir_boton(b)}")
 
 
 def bloque_tasa(s: Sonda) -> None:

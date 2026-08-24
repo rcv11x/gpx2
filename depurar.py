@@ -33,6 +33,105 @@ from gpx2.transport import RawChannel, enumerate_nodes
 
 
 # ---------------------------------------------------------------------------
+# HID++ 1.0 — el protocolo del receptor
+# ---------------------------------------------------------------------------
+#
+# El receptor no habla HID++ 2.0: usa el protocolo viejo, de registros. Un
+# registro es un número de 0 a 255 con hasta tres bytes de contenido (o
+# dieciséis, si es "largo"). No hay forma de preguntar cuáles existen: se
+# prueban todos y se mira cuál contesta algo que no sea "dirección inválida".
+
+SUB_LEER, SUB_ESCRIBIR = 0x81, 0x80
+SUB_LEER_LARGO, SUB_ESCRIBIR_LARGO = 0x83, 0x82
+ERROR_HIDPP1 = 0x8F
+
+ERRORES_1_0 = {
+    0x01: "orden inválida", 0x02: "dirección inválida", 0x03: "valor inválido",
+    0x04: "falló la conexión", 0x05: "demasiados dispositivos",
+    0x06: "ya existe", 0x07: "ocupado", 0x08: "dispositivo desconocido",
+    0x09: "error de recursos", 0x0A: "petición no disponible",
+    0x0B: "parámetro no admitido", 0x0C: "PIN incorrecto",
+}
+
+
+class Hidpp10:
+    """Conversación HID++ 1.0 con un receptor.
+
+    El paquete es [report_id][índice][sub_id][dirección][p0][p1][p2]. La
+    respuesta buena repite sub_id y dirección; la mala llega con sub_id 0x8F.
+    """
+
+    def __init__(self, canal, indice: int = 0xFF):
+        self.ch = canal
+        self.indice = indice
+
+    def _intercambio(self, sub: int, direccion: int, params: bytes,
+                     report_id: int, timeout: float) -> bytes:
+        from gpx2.hidpp import LEN
+        cabeza = bytes([report_id, self.indice, sub, direccion])
+        with self.ch.sesion():
+            self.ch.drain()
+            self.ch.write((cabeza + params).ljust(LEN[report_id], b"\x00"))
+            limite = time.monotonic() + timeout
+            while True:
+                queda = limite - time.monotonic()
+                if queda <= 0:
+                    raise NoResponse(f"registro 0x{direccion:02X}: sin respuesta")
+                datos = self.ch.read(queda)
+                if datos is None or len(datos) < 5 or datos[1] != self.indice:
+                    continue
+                if datos[2] == ERROR_HIDPP1 and datos[3] == sub and datos[4] == direccion:
+                    raise HidppError(datos[5], legacy=True)
+                if datos[2] == sub and datos[3] == direccion:
+                    return datos[4:]
+
+    def leer(self, direccion: int, params: bytes = b"\x00\x00\x00",
+             timeout: float = 0.4) -> bytes:
+        from gpx2.hidpp import SHORT
+        return self._intercambio(SUB_LEER, direccion, params, SHORT, timeout)
+
+    def leer_largo(self, direccion: int, params: bytes = b"\x00\x00\x00",
+                   timeout: float = 0.4) -> bytes:
+        from gpx2.hidpp import SHORT
+        return self._intercambio(SUB_LEER_LARGO, direccion, params, SHORT, timeout)
+
+    def escribir(self, direccion: int, params: bytes,
+                 timeout: float = 0.6) -> bytes:
+        from gpx2.hidpp import SHORT
+        return self._intercambio(SUB_ESCRIBIR, direccion, params.ljust(3, b"\x00"),
+                                 SHORT, timeout)
+
+    def escribir_largo(self, direccion: int, params: bytes,
+                       timeout: float = 0.6) -> bytes:
+        from gpx2.hidpp import LONG
+        return self._intercambio(SUB_ESCRIBIR_LARGO, direccion,
+                                 params.ljust(16, b"\x00"), LONG, timeout)
+
+
+# Lo que se sabe de los registros de un receptor, para poner nombre a lo que
+# aparezca. Sale de la documentación de Logitech y de Solaar.
+REGISTROS = {
+    0x00: "notificaciones",
+    0x01: "banderas de botones / detección de mano",
+    0x02: "conexión del receptor",
+    0x03: "configuración de dispositivos",
+    0x07: "estado de batería",
+    0x09: "intercambio de Fn",
+    0x0D: "carga de batería",
+    0x17: "iluminación del teclado",
+    0x51: "tres LEDs",
+    0x63: "DPI del ratón",
+    0xB2: "emparejamiento",
+    0xB3: "actividad de dispositivos",
+    0xB5: "información del receptor",
+    0xC0: "descubrimiento Bolt",
+    0xC1: "emparejamiento Bolt",
+    0xF1: "firmware",
+    0xFB: "identificador único Bolt",
+}
+
+
+# ---------------------------------------------------------------------------
 # Utilidades de presentación
 # ---------------------------------------------------------------------------
 
@@ -570,6 +669,60 @@ def bloque_mapa(espera: float) -> None:
         return
     print(f"  Escuchando: {', '.join(logitech)}")
     mapa_de_botones(logitech, espera)
+
+
+def bloque_registros(nodo_forzado: str | None, todos: bool = False) -> None:
+    """Barre los registros del receptor y enseña los que contestan.
+
+    No hay forma de preguntarle a un receptor qué registros tiene: se prueban
+    y se mira. "Dirección inválida" significa que no existe; cualquier otra
+    respuesta es algo que está ahí. Sólo lee.
+    """
+    titulo("REGISTROS DEL RECEPTOR (HID++ 1.0)")
+
+    # El receptor es el nodo que responde en el índice 0xFF con HID++ 1.0.
+    candidatos = [n for n in enumerate_nodes()
+                  if n.hidpp and n.is_logitech
+                  and (not nodo_forzado or n.path == nodo_forzado)]
+    if not candidatos:
+        print("  No se encontró ningún nodo Logitech con canal HID++.")
+        return
+
+    for nodo in candidatos:
+        canal = RawChannel(nodo.path)
+        hpp1 = Hidpp10(canal, 0xFF)
+        # Un receptor contesta al registro de firmware; un ratón detrás del
+        # receptor, no: así se distingue sin depender del nombre.
+        try:
+            hpp1.leer(0xF1, b"\x01\x00\x00", timeout=0.3)
+        except (HidppError, NoResponse, OSError):
+            canal.close()
+            continue
+
+        print(f"\n  == {nodo.path}  ({nodo.id_str})  {nodo.name} ==")
+        rango = range(0x00, 0x100) if todos else sorted(REGISTROS)
+        encontrados = 0
+        for direccion in rango:
+            for etiqueta, leer in (("corto", hpp1.leer),
+                                   ("largo", hpp1.leer_largo)):
+                try:
+                    r = leer(direccion, timeout=0.25)
+                except HidppError as e:
+                    # "Dirección inválida" es la respuesta normal de un
+                    # registro que no existe: no se enseña, sería ruido.
+                    if e.code != 0x02:
+                        print(f"     0x{direccion:02X} {etiqueta:5} "
+                              f"⚠ {ERRORES_1_0.get(e.code, hex(e.code))}"
+                              f"   {REGISTROS.get(direccion, '')}")
+                        encontrados += 1
+                    continue
+                except (NoResponse, OSError):
+                    continue
+                print(f"     0x{direccion:02X} {etiqueta:5} {hx(r[:16])}"
+                      f"   {REGISTROS.get(direccion, '')}")
+                encontrados += 1
+        print(f"\n     {encontrados} registro(s) respondieron")
+        canal.close()
 
 
 def bloque_medir(segundos: float) -> None:
@@ -1332,6 +1485,10 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--registros", action="store_true",
+                    help="barre los registros HID++ 1.0 del receptor (sólo lee)")
+    ap.add_argument("--todos-los-registros", action="store_true",
+                    help="prueba los 256, no sólo los conocidos. Tarda más")
     ap.add_argument("--mapa-botones", nargs="?", const=25.0, type=float,
                     metavar="SEGUNDOS",
                     help="te pide cada botón y anota qué código llega")
@@ -1350,6 +1507,10 @@ def main() -> int:
     ap.add_argument("--solo-tasa", action="store_true",
                     help="prueba únicamente la escritura de la tasa de reporte")
     args = ap.parse_args()
+
+    if args.registros or args.todos_los_registros:
+        bloque_registros(args.nodo, args.todos_los_registros)
+        return 0
 
     if args.mapa_botones:
         bloque_mapa(args.mapa_botones)

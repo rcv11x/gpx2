@@ -295,9 +295,17 @@ class PaginaRaton(QWidget):
             return
         if etiqueta is not None:
             etiqueta.setVisible(True)
-        pastilla_.setText(f"⬢ {perfil.nombre}")
+        # El asterisco es la convención de "hay cambios sin guardar". Sin esto,
+        # el aviso vivía en una tarjeta de una pestaña concreta: cambiabas la
+        # tasa, te ibas a otra pestaña y ya no había forma de saberlo.
+        sin_guardar = self._difiere_del_perfil(perfil)
+        pastilla_.setText(f"⬢ {perfil.nombre}" + (" *" if sin_guardar else ""))
         pastilla_.setToolTip(
-            "Perfil que manda ahora mismo. Se cambia en la pestaña Perfiles.")
+            "Perfil que manda ahora mismo. Se cambia en la pestaña Perfiles."
+            + ("\n\nEl asterisco avisa de que lo que tiene el ratón ahora no "
+               "es lo que guarda el perfil: se perderá al aplicar cualquier "
+               "perfil. Se guarda desde la pestaña Ajustes."
+               if sin_guardar else ""))
         pastilla_.setVisible(True)
 
     @staticmethod
@@ -702,6 +710,24 @@ class PaginaRaton(QWidget):
 
         return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
 
+    def _difiere_del_perfil(self, perfil) -> list[str]:
+        """Qué tiene el ratón ahora que no coincide con lo que guarda el perfil.
+
+        Se comparan los dos ajustes, no sólo el DPI: cambiar la tasa y que no
+        pasara nada dejaba sin forma de llevarla al perfil.
+        """
+        if perfil is None:
+            return []
+        dpi = self.estado.get("dpi")
+        rate = self.estado.get("rate")
+        difieren = []
+        if dpi is not None and perfil.ajustes.dpi not in (None, dpi.actual):
+            difieren.append(f"{perfil.ajustes.dpi} DPI")
+        if rate is not None and perfil.ajustes.report_rate_hz not in (
+                None, rate.actual_hz):
+            difieren.append(f"{perfil.ajustes.report_rate_hz} Hz")
+        return difieren
+
     def _refrescar_desfase(self) -> None:
         """Avisa si lo que tiene el ratón ya no es lo que dice el perfil."""
         etiqueta = getattr(self, "lbl_desfase", None)
@@ -716,14 +742,7 @@ class PaginaRaton(QWidget):
             boton.setVisible(False)
             return
 
-        # Se comparan los dos ajustes, no sólo el DPI: cambiar la tasa y que no
-        # apareciera el botón dejaba sin forma de guardarla en el perfil.
-        difieren = []
-        if dpi is not None and perfil.ajustes.dpi not in (None, dpi.actual):
-            difieren.append(f"{perfil.ajustes.dpi} DPI")
-        if rate is not None and perfil.ajustes.report_rate_hz not in (
-                None, rate.actual_hz):
-            difieren.append(f"{perfil.ajustes.report_rate_hz} Hz")
+        difieren = self._difiere_del_perfil(perfil)
 
         if not difieren:
             etiqueta.setText(f"Coincide con el perfil «{perfil.nombre}».")

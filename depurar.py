@@ -274,6 +274,91 @@ def bloque_escritura_dpi(s: Sonda, estado: dict, validos: list[int],
               "       vuelve a lanzarlo con --escribir para pasar a modo host.")
 
 
+def bloque_perfiles_onboard(s: Sonda) -> None:
+    """Vuelca la memoria de perfiles del ratón. Sólo lee, no escribe nada.
+
+    El primer byte de cada perfil es la tasa de reporte en milisegundos, y ahí
+    está la sospecha: puede que el enlace inalámbrico coja de aquí su tasa al
+    conectarse, y por eso escribir por 0x8061 no sirva de nada.
+
+    Leer memoria es la función 5: [sector(2), desplazamiento(2)] -> 16 bytes.
+    """
+    titulo("PERFILES ONBOARD (0x8100) — volcado de memoria")
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    # [0]=memoria [1]=formato de perfil [2]=formato de macro
+    # [3]=nº perfiles [4]=fuera de caja [5]=botones [6]=sectores
+    # [7:9]=tamaño de sector [9]=desplazamiento
+    n_perfiles, botones = info[3], info[5]
+    sectores = info[6]
+    tam = int.from_bytes(info[7:9], "big")
+    print(f"  formato de perfil: 0x{info[1]:02X}   ·   perfiles: {n_perfiles}"
+          f"   ·   botones: {botones}")
+    print(f"  sectores: {sectores}   ·   tamaño de sector: {tam} bytes")
+    if info[1] != 0x06:
+        print(f"  OJO: el formato 0x{info[1]:02X} es más nuevo que el 0x06 que")
+        print("  parsea Solaar, así que la disposición puede no coincidir.")
+
+    def leer(sector: int, desp: int) -> bytes | None:
+        return s.llamar(0x8100, 0x05,
+                        bytes([sector >> 8, sector & 0xFF,
+                               desp >> 8, desp & 0xFF]))
+
+    print("\n  -- directorio (sector 0) --")
+    dir0 = leer(0, 0)
+    if not dir0:
+        print("     no se pudo leer")
+        return
+    print(f"     {hx(dir0)}")
+
+    cabeceras = []
+    for i in range(0, 16, 4):
+        sector = int.from_bytes(dir0[i:i + 2], "big")
+        if sector in (0xFFFF, 0x0000):
+            break
+        cabeceras.append((sector, dir0[i + 2]))
+    if not cabeceras:
+        print("     el directorio está en ROM o vacío; se prueba el sector 1")
+        dir0 = leer(1, 0)
+        if dir0:
+            print(f"     {hx(dir0)}")
+            for i in range(0, 16, 4):
+                sector = int.from_bytes(dir0[i:i + 2], "big")
+                if sector in (0xFFFF, 0x0000):
+                    break
+                cabeceras.append((sector, dir0[i + 2]))
+
+    activo = s.llamar(0x8100, 0x04)
+    if activo:
+        print(f"\n  perfil activo (f4): {hx(activo[:4])}")
+
+    for n, (sector, habilitado) in enumerate(cabeceras, start=1):
+        print(f"\n  -- perfil {n}: sector 0x{sector:04X}"
+              f"   {'activo' if habilitado else 'deshabilitado'} --")
+        crudo = b""
+        for desp in (0, 16):
+            trozo = leer(sector, desp)
+            if trozo is None:
+                break
+            print(f"     +{desp:02d}  {hx(trozo)}")
+            crudo += trozo
+        if len(crudo) < 16:
+            continue
+        # [0]=tasa en ms  [1]=índice de DPI por defecto  [2]=índice del botón
+        # de cambio  [3:13]=cinco resoluciones u16 LITTLE endian
+        ms = crudo[0]
+        print(f"\n     tasa guardada: {ms} ms"
+              + (f"  =  {1000 // ms} Hz" if ms else "  (0: ¿sub-milisegundo?)"))
+        print(f"     índice de DPI por defecto: {crudo[1]}   ·   "
+              f"del botón de cambio: {crudo[2]}")
+        dpis = [int.from_bytes(crudo[3 + i * 2:5 + i * 2], "little")
+                for i in range(5)]
+        print(f"     resoluciones: {dpis}")
+
+
 def bloque_tasa(s: Sonda) -> None:
     """Números de función según Solaar: 1 = lista, 2 = leer, 3 = escribir."""
     titulo("TASA DE REPORTE (0x8061)")
@@ -455,6 +540,8 @@ def main() -> int:
         estado = bloque_dpi(s)
         validos = bloque_rangos(s)
     bloque_tasa(s)
+    if s.tiene(0x8100):
+        bloque_perfiles_onboard(s)
 
     if args.escribir and s.tiene(0x2202) and not args.solo_tasa:
         bloque_escritura_dpi(s, estado, validos, args.dpi)

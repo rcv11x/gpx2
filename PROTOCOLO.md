@@ -182,16 +182,20 @@ Queda un cabo suelto interesante: en Windows **sí** se consiguen 8000 Hz de
 forma inalámbrica. Así que se puede; falta averiguar por dónde. Dos hipótesis
 sin probar, en orden de lo barato que sale comprobarlas:
 
-1. **La escritura se guarda pero sólo surte efecto al rehacer el enlace.** La
-   tasa inalámbrica es una propiedad del enlace, y nosotros releemos al
-   instante, cuando todavía está el anterior. Se comprueba con
-   `depurar.py --escribir --solo-tasa --sin-restaurar`, apagando y encendiendo
-   el ratón después, y mirando qué dice entonces la función 2.
-2. **Hay que configurar el receptor, no el ratón.** El receptor habla HID++ 1.0
+1. ~~La escritura se guarda y surte efecto al rehacer el enlace.~~
+   **Descartada.** Se escribieron 4000 Hz sin restaurar, se apagó y encendió el
+   ratón, y la función 2 seguía devolviendo el índice 3 (1000 Hz). La orden no
+   se guarda en ninguna parte.
+2. **La tasa la manda el perfil onboard.** Su primer byte es la tasa de reporte,
+   y puede que el enlace la coja de ahí al conectarse — lo que explicaría que
+   escribir por 0x8061 no sirva de nada estando en modo host. Pendiente de
+   volcar la memoria de perfiles y mirarlo (`depurar.py` lo hace, sólo lee).
+3. **Hay que configurar el receptor, no el ratón.** El receptor habla HID++ 1.0
    por registros, no por features, así que sería otro camino entero.
 
-Si acierta la primera, `set()` no puede seguir lanzando `EscrituraIgnorada` al
-releer de inmediato: tendría que decir que el cambio se aplicará al reconectar.
+De paso quedó claro que **apagar el ratón con su interruptor NO le hace perder
+el modo host ni el DPI**: tras el ciclo seguía en host y a 1200. Lo que sí los
+pierde es desenchufar el receptor.
 
 Por eso `ExtendedReportRate.set()` **relee y lanza `EscrituraIgnorada`** si el
 valor no cambió: sin eso, la interfaz enseñaría una tasa que el ratón no tiene.

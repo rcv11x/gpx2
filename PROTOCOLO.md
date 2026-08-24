@@ -192,17 +192,29 @@ sin probar, en orden de lo barato que sale comprobarlas:
    coja de ahí.
 
    Probado escribir la tasa **estando en modo onboard**: el ratón responde
-   entonces **error 0x02 (parámetro inválido)** en vez de aceptarla en silencio,
-   y el byte del perfil no cambia. Son dos comportamientos distintos según el
-   modo, así que el modo influye, pero por esta vía tampoco entra.
+   entonces **error 0x02** en vez de aceptarla en silencio. Y no es por el
+   valor — el índice 2 (500 Hz), que está en todas las listas, da el mismo
+   error. En modo onboard sencillamente no deja escribir la tasa. La lista de
+   la función 1 tampoco se encoge: sigue en `0x7f`.
+
+   Resumen de las tres situaciones probadas:
+
+   | Estado | Escritura de la tasa |
+   |---|---|
+   | cable + host | **funciona**, hasta 1000 Hz |
+   | receptor + host | acepta sin error y no aplica |
+   | receptor + onboard | rechaza siempre con 0x02 |
 
    Lo que queda es **escribir el perfil en memoria** (función 6 de `0x8100`):
    leer el sector entero, cambiar el primer byte, recalcular el CRC16 y
    reescribirlo. Es lo que hace G HUB en Windows. No toca firmware, así que no
    puede dejar el ratón inservible, pero sí corromper sus perfiles; haría falta
    guardar antes una copia del sector y tener a mano `0x1802` (reinicio).
-3. **Hay que configurar el receptor, no el ratón.** El receptor habla HID++ 1.0
-   por registros, no por features, así que sería otro camino entero.
+3. **El límite lo pone el receptor, no el ratón.** `f0(1)` dice lo que el
+   *ratón* admite sin cable, pero el enlace va a la velocidad que puedan los
+   dos. Si el receptor tope a 1000 Hz, encaja con todo lo visto: el ratón
+   acepta la orden y el enlace no cambia. Comprobarlo exigiría hablar con el
+   receptor, que usa HID++ 1.0 por registros y es otro camino entero.
 
 De paso quedó claro que **apagar el ratón con su interruptor NO le hace perder
 el modo host ni el DPI**: tras el ciclo seguía en host y a 1200. Lo que sí los

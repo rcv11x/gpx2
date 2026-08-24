@@ -508,11 +508,12 @@ class PaginaRaton(QWidget):
             return False
         QMessageBox.information(
             self, "Guardado en el ratón",
-            f"{que.capitalize()} guardado en la memoria del ratón.\n\n"
+            f"{que.capitalize()} ya están en la memoria del ratón.\n\n"
             f"Copia del estado anterior en:\n{copia}"
             + ("" if not self.raton.onboard.es_host() else
-               "\n\nEl ratón está en modo host, así que no lo notarás hasta "
-               "que lo pases a onboard o lo conectes en otro ordenador."))
+               "\n\nAhora mismo el ratón está en modo host, y en ese modo usa "
+               "los botones del firmware, no los que acabas de guardar. Para "
+               "probarlos, pulsa «Volver a modo onboard» aquí arriba."))
         return True
 
     def _guardar_botones(self) -> None:

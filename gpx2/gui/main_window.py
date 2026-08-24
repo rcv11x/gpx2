@@ -1113,6 +1113,12 @@ class PanelPerfiles(QWidget):
                 "Para activarlo:  systemctl --user enable --now gpx2d.service")
             activo = self.motor.perfil_activo or ""
 
+        try:
+            from ..procesos import nombres_de_steam
+            nombres_steam = nombres_de_steam()
+        except Exception:
+            nombres_steam = {}
+
         self.lista.clear()
         for p in self.almacen.lista():
             marcas = []
@@ -1123,8 +1129,13 @@ class PanelPerfiles(QWidget):
             ajustes = p.ajustes.campos()
             resumen = ", ".join(
                 f"{'DPI' if k == 'dpi' else 'Hz'} {v}" for k, v in ajustes.items()) or "sin ajustes"
-            juegos = ", ".join(p.activacion.ejecutables)
-            detalle = resumen + (f"  ·  {juegos}" if juegos else "")
+            # Los juegos de Steam se guardan por AppID, que no le dice nada a
+            # nadie: aquí se enseña el nombre. Sin esto, añadir un juego de
+            # Steam parecía no haber hecho nada.
+            juegos = list(p.activacion.ejecutables)
+            for appid in p.activacion.steam_appids:
+                juegos.append(nombres_steam.get(appid, f"Steam {appid}"))
+            detalle = resumen + (f"  ·  {', '.join(juegos)}" if juegos else "")
             if marcas:
                 detalle += f"  ·  {' · '.join(marcas)}"
             item = QListWidgetItem(p.nombre)
@@ -1152,8 +1163,18 @@ class PanelPerfiles(QWidget):
             w = w.parent()
         return w
 
+    def _exige_seleccion(self, accion: str):
+        """El perfil elegido, o un aviso. Callarse deja al usuario pulsando un
+        botón que no hace nada, sin forma de saber qué falta."""
+        perfil = self._seleccionado()
+        if perfil is None:
+            QMessageBox.information(
+                self, "Elige un perfil primero",
+                f"Selecciona en la lista el perfil {accion}.")
+        return perfil
+
     def _aplicar(self) -> None:
-        self._aplicar_perfil(self._seleccionado())
+        self._aplicar_perfil(self._exige_seleccion("que quieres aplicar"))
 
     def _aplicar_perfil(self, perfil) -> None:
         if perfil is None:
@@ -1189,7 +1210,7 @@ class PanelPerfiles(QWidget):
 
     def _editar_juegos(self) -> None:
         from .dialogos import DialogoJuegos
-        perfil = self._seleccionado()
+        perfil = self._exige_seleccion("cuyos juegos quieres elegir")
         if perfil is None:
             return
         dlg = DialogoJuegos(perfil.nombre,
@@ -1202,7 +1223,7 @@ class PanelPerfiles(QWidget):
         self.refrescar()
 
     def _por_defecto(self) -> None:
-        perfil = self._seleccionado()
+        perfil = self._exige_seleccion("que quieres poner por defecto")
         if perfil is None:
             return
         self.almacen.marcar_por_defecto(perfil.id)
@@ -1211,7 +1232,7 @@ class PanelPerfiles(QWidget):
         self._aplicar_perfil(perfil)
 
     def _borrar(self) -> None:
-        perfil = self._seleccionado()
+        perfil = self._exige_seleccion("que quieres borrar")
         if perfil is None:
             return
         if QMessageBox.question(

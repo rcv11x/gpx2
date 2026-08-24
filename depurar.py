@@ -347,16 +347,30 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
             crudo += trozo
         if len(crudo) < 16:
             continue
-        # [0]=tasa en ms  [1]=índice de DPI por defecto  [2]=índice del botón
-        # de cambio  [3:13]=cinco resoluciones u16 LITTLE endian
-        ms = crudo[0]
-        print(f"\n     tasa guardada: {ms} ms"
-              + (f"  =  {1000 // ms} Hz" if ms else "  (0: ¿sub-milisegundo?)"))
-        print(f"     índice de DPI por defecto: {crudo[1]}   ·   "
-              f"del botón de cambio: {crudo[2]}")
-        dpis = [int.from_bytes(crudo[3 + i * 2:5 + i * 2], "little")
-                for i in range(5)]
-        print(f"     resoluciones: {dpis}")
+        # Disposición del formato 0x07, deducida del volcado del PRO X 2. NO es
+        # la del 0x06 que parsea Solaar: allí la tasa va en milisegundos y cada
+        # nivel de DPI ocupa un u16; aquí la tasa es un ÍNDICE de la misma tabla
+        # que usa 0x8061, y cada nivel lleva sus dos ejes y su distancia de
+        # despegue. Que b[0] valga lo mismo que devuelve 0x8061 f2, y que b[2]
+        # apunte al DPI que el ratón declara "de fábrica", es lo que confirma
+        # la lectura.
+        MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
+
+        def hz(i: int) -> str:
+            return f"{MAPEO_HZ[i]} Hz" if i < len(MAPEO_HZ) else f"índice {i}?"
+
+        print(f"\n     tasa guardada:      índice {crudo[0]} = {hz(crudo[0])}")
+        print(f"     segunda tasa:       índice {crudo[1]} = {hz(crudo[1])}"
+              "   (¿la de la otra vía?)")
+        print(f"     nivel de DPI por defecto: {crudo[2]}   ·   b[3]: {crudo[3]}")
+        for i in range(5):
+            o = 4 + i * 5
+            if o + 4 >= len(crudo):
+                break
+            x = int.from_bytes(crudo[o:o + 2], "little")
+            y = int.from_bytes(crudo[o + 2:o + 4], "little")
+            marca = "  ← por defecto" if i == crudo[2] else ""
+            print(f"     nivel {i}: X={x:>5}  Y={y:>5}  despegue={crudo[o + 4]}{marca}")
 
 
 def bloque_tasa(s: Sonda) -> None:
@@ -385,7 +399,8 @@ def bloque_tasa(s: Sonda) -> None:
 
 
 def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None,
-                          restaurar: bool = True) -> None:
+                          restaurar: bool = True,
+                          en_onboard: bool = False) -> None:
     """Escribe la tasa de reporte con f3 y verifica leyendo con f2.
 
     Prueba varios formatos y comprueba el resultado DESPUÉS DE CADA UNO: en
@@ -429,6 +444,19 @@ def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None,
         idx_destino = candidatos[-1]
 
     print(f"\n  Objetivo: índice {idx_destino} = {MAPEO_HZ[idx_destino]} Hz\n")
+
+    # El perfil onboard guarda la tasa como índice en su primer byte, así que
+    # puede que 0x8061 sólo escriba ahí cuando manda el perfil. Es reversible:
+    # al final se vuelve al modo en el que estaba.
+    modo_previo = None
+    if en_onboard:
+        m = s.llamar(0x8100, 0x02)
+        modo_previo = m[0] if m else None
+        print("  Pasando a modo onboard para probar si la tasa entra por ahí…")
+        s.llamar(0x8100, 0x01, b"\x01")
+        ahora = s.llamar(0x8100, 0x02)
+        print(f"     modo: 0x{ahora[0]:02X}" if ahora else "     no se pudo leer")
+        print()
 
     def probar(etiqueta: str, params: bytes) -> bool:
         """Escribe y comprueba leyendo. Devuelve si la tasa cambió de verdad."""
@@ -480,6 +508,16 @@ def bloque_escritura_tasa(s: Sonda, objetivo_hz: int | None = None,
               "que\n       la tasa la fije el enlace inalámbrico y no se pueda "
               "tocar por\n       receptor. Contrástalo con Solaar (ver más abajo).")
 
+    if en_onboard:
+        perfil = s.llamar(0x8100, 0x05, b"\x00\x01\x00\x00")
+        if perfil:
+            print(f"\n  primer byte del perfil 1 ahora: {perfil[0]} "
+                  f"({MAPEO_HZ[perfil[0]] if perfil[0] < 7 else '?'} Hz)")
+            print(f"  sector completo: {hx(perfil)}")
+        if modo_previo is not None:
+            print(f"  Volviendo al modo anterior (0x{modo_previo:02X})…")
+            s.llamar(0x8100, 0x01, bytes([modo_previo]))
+
     if not restaurar:
         print("\n  --sin-restaurar: la tasa se queda escrita.")
         print("  Apaga el ratón, enciéndelo, y vuelve a lanzar esto SIN")
@@ -511,6 +549,9 @@ def main() -> int:
                     help="DPI objetivo para la prueba de escritura")
     ap.add_argument("--hz", type=int,
                     help="Hz objetivo para la prueba de tasa de reporte")
+    ap.add_argument("--en-onboard", action="store_true",
+                    help="prueba la escritura de la tasa con el ratón en modo "
+                         "onboard, por si la tasa la manda su perfil interno")
     ap.add_argument("--sin-restaurar", action="store_true",
                     help="deja la tasa escrita, para comprobar si surte efecto "
                          "tras apagar y encender el ratón")
@@ -547,7 +588,8 @@ def main() -> int:
         bloque_escritura_dpi(s, estado, validos, args.dpi)
 
     if args.escribir and s.tiene(0x8061):
-        bloque_escritura_tasa(s, args.hz, not args.sin_restaurar)
+        bloque_escritura_tasa(s, args.hz, not args.sin_restaurar,
+                              args.en_onboard)
 
     print("\n")
     ch.close()

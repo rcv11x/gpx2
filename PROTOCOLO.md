@@ -222,6 +222,47 @@ lenta, `3` completa, `4` error.
 
 ---
 
+## 0x8100 — Formato de perfil 0x07 · DECODIFICADO
+
+Este ratón usa **formato de perfil 0x07**. Solaar sólo parsea el 0x06, así que
+esta disposición está deducida de nuestro propio volcado y no aparece
+documentada en ningún otro sitio.
+
+Leer memoria es la **función 5**: `[sector(2), desplazamiento(2)]` → 16 bytes.
+El directorio está en el sector 0, con entradas de 4 bytes
+`[sector(2), habilitado(1), relleno(1)]` hasta `ffff`.
+
+Volcado real del perfil 1 (sector 0x0001) del PRO X 2:
+
+```
++00  03 03 00 00 20 03 20 03 02 b0 04 b0 04 02 40 06
++16  40 06 02 60 09 60 09 02 80 0c 80 0c 02 00 00 00
+```
+
+| Byte | Qué es |
+|---|---|
+| `b[0]` | tasa de reporte, **como índice** de la tabla de `0x8061` |
+| `b[1]` | otra tasa — probablemente la de la otra vía |
+| `b[2]` | nivel de DPI por defecto |
+| `b[3]` | sin identificar |
+| `b[4]` en adelante | cinco niveles de **5 bytes**: `dpiX(2 LE), dpiY(2 LE), despegue(1)` |
+
+Dos cosas confirman la lectura: `b[0]` vale 3, exactamente lo que devuelve
+`0x8061` función 2 (1000 Hz), y `b[2]` vale 0, que apunta al nivel de 800 DPI,
+que es el que el ratón declara "de fábrica" en `0x2202`. Los cinco niveles
+salen 800/1200/1600/2400/3200, los mismos que da `0x2202` función 3.
+
+**Aquí está la diferencia con el 0x06**: allí la tasa va en milisegundos y cada
+nivel de DPI ocupa un solo u16. En milisegundos no se pueden expresar 8000 Hz
+(serían 0,125 ms), así que el cambio a índice es justo lo que hacía falta para
+las tasas altas. Refuerza la sospecha de que la tasa del enlace inalámbrico
+sale de aquí y no de `0x8061`.
+
+Los DPI van en **little endian**, al revés que en `0x2202`. No hay una razón
+buena; es así.
+
+---
+
 ## 0x1B04 — Botones reprogramables · NO EXISTE EN ESTE RATÓN
 
 El PRO X 2 **no expone esta feature**. Sus botones se configuran por perfil

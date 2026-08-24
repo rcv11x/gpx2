@@ -388,10 +388,9 @@ class ExtendedReportRate(Capability):
             actual = self.MAPEO_HZ[leido] if leido < len(self.MAPEO_HZ) else "?"
             raise EscrituraIgnorada(
                 f"el ratón aceptó la orden pero sigue a {actual} Hz. "
-                "Tu ratón sabe llegar más alto sin cable, pero el enlace va a la "
-                "velocidad que puedan los dos extremos, y los receptores que no "
-                "son de 8K topan aquí. No es un fallo del programa ni algo que "
-                "puedas ajustar: a Solaar le pasa lo mismo.")
+                "Tanto el ratón como el receptor dicen poder con tasas más "
+                "altas, pero el enlace inalámbrico se queda donde está y aún no "
+                "sabemos cómo se le pide que suba. A Solaar le pasa lo mismo.")
 
 
 # ---------------------------------------------------------------------------

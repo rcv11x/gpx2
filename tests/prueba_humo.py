@@ -65,7 +65,7 @@ def main() -> int:
     except EscrituraIgnorada as e:
         ignorada = str(e)
     comprobar(ignorada is not None, "detecta que el ratón ignoró la tasa")
-    comprobar(ignorada and "cable" in ignorada, "y explica por qué al usuario")
+    comprobar(ignorada and "enlace" in ignorada, "y explica por qué al usuario")
     comprobar(raton.rate.get().actual_hz == 1000, "la tasa sigue donde estaba")
     comprobar(raton.onboard.set_host(True), "pasa el ratón a modo host")
     comprobar(raton.onboard.set_host(False), "y lo devuelve a modo onboard")

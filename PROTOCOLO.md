@@ -178,29 +178,43 @@ función 1 declara ahí. **A Solaar le pasa lo mismo**:
 —que hace con `read(cached=False)`, contra el dispositivo— sigue devolviendo
 `1ms`. Sin resolver.
 
-### Conclusión: el tope lo pone el receptor
+### Sin resolver: el hardware sí puede, falta saber cómo se pide
 
 Medida la tasa real con `depurar.py --medir`, que cronometra los informes que
-llegan al kernel y no le pregunta nada al ratón: **1000 Hz exactos**. 4484
-intervalos con mediana de 1,000 ms y el más corto en 0,998. No hay ambigüedad.
+llegan al kernel: **1000 Hz exactos**, 4484 intervalos con mediana de 1,000 ms.
 
-Junto todo:
+Se dio por cerrado como límite del receptor, y **era una conclusión precipitada**:
+estaba deducida, no medida. Mirando el árbol USB resulta que no se sostiene.
 
-- el ratón declara `0x7f` sin cable, o sea que **él** sabe llegar a 8000;
-- escribir la tasa por receptor se acepta sin error y no cambia nada;
-- en modo host los perfiles onboard están desactivados, así que el perfil no
-  puede ser quien lo impide;
-- el enlace va a la velocidad que puedan los dos extremos.
+```
+046d:c54d   velocidad 480 Mb/s (high-speed)
+  1-3.2.2:1.0  ep_81  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
+  1-3.2.2:1.1  ep_82  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
+  1-3.2.2:1.2  ep_83  Interrupt  bInterval=01  ->  125 us  ->  8000 Hz
+```
 
-La explicación que no necesita inventar nada es que **el receptor tope a
-1000 Hz**. Los 8K de estos ratones necesitan un receptor específico; el que
-viene en la caja no lo es. Si eso es así, no hay nada que el software pueda
-hacer: no es una feature que nos falte implementar.
+En USB *high-speed* el intervalo del endpoint es `2^(bInterval-1) x 125 us`. Un
+receptor de 1 kHz declararía `bInterval=4`. Éste declara **1**, o sea que el
+anfitrión lo sondea cada 125 µs y su lado USB está preparado para 8000 Hz.
 
-Queda sin confirmar del todo porque haría falta o un receptor de 8K, o
-contrastar contra Windows. **No merece más tiempo**: es un límite del hardware,
-no una tarea pendiente. Si algún día aparece un receptor de 8K, `--medir` da la
-respuesta en cinco segundos.
+Con eso, lo que sabemos es:
+
+- el rato&#769;n dice que sabe llegar a 8000 sin cable (`0x7f`);
+- el receptor tiene endpoints de 125 µs, así que tampoco topa por USB;
+- y sin embargo sólo llegan 1000 informes por segundo.
+
+El límite está en **cómo se configura el enlace de radio**, y ésa es la pieza
+que no hemos encontrado. Las vías que quedan por explorar:
+
+1. **Los registros del receptor.** Habla HID++ 1.0 por registros, no por
+   features, y expone tres interfaces (`hidraw6`, `hidraw8`, `hidraw9` en este
+   equipo) de las que sólo hemos hablado con una.
+2. **Escribir el perfil onboard.** Su primer byte es la tasa como índice, y es
+   lo que toca G HUB en Windows.
+
+Lo que **está descartado**: que lo impida el modo onboard/host, que la escritura
+se guarde para aplicarse al reconectar, y que el cable sirva de algo (por ahí el
+tope son 1000 Hz de verdad, y ahí sí se puede escribir).
 
 Por eso `ExtendedReportRate.set()` **relee y lanza `EscrituraIgnorada`** si el
 valor no cambió: sin eso, la interfaz enseñaría una tasa que el ratón no tiene.

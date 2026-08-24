@@ -369,6 +369,22 @@ pausas y no la tasa.
 No necesita sudo si está puesta la regla udev: `uaccess` cubre también
 `/dev/input`.
 
+## Cómo pedir ayuda con otro ratón
+
+`depurar.py --informe` recoge en un fichero todo lo que se puede leer del
+dispositivo: sus features, la batería, el DPI y sus rangos, la tasa, el perfil
+onboard y lo que declare de iluminación. **No escribe nada**, y el fichero sólo
+lleva el modelo del ratón y sus respuestas al protocolo.
+
+Es la forma de añadir soporte para un ratón que no se tiene delante: alguien lo
+ejecuta, manda el fichero, y se decodifica desde bytes reales — que es
+exactamente como salieron el formato 0x07 y el flujo paginado de DPI.
+
+La iluminación está sin decodificar. Se sabe dónde vive —cuatro bloques de 11
+bytes en el perfil onboard, desde el byte 208, y las features `0x8070`,
+`0x8071` y `0x1300`— pero el PRO X 2 no tiene luces y no hay volcados que
+mirar. `--leds` los recoge cuando aparezca alguien que sí las tenga.
+
 ## Cómo se verifica algo nuevo
 
 1. `sudo python3 depurar.py` — lee y decodifica, sin tocar nada.

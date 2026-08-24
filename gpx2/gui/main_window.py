@@ -754,6 +754,10 @@ class PaginaRaton(QWidget):
             QMessageBox.warning(self, "No se pudo guardar el perfil", str(e))
             return
         self._refrescar_desfase()
+        self._refrescar_perfil_activo()
+        panel = getattr(self, "panel_perfiles", None)
+        if panel is not None:
+            panel.refrescar()
         _avisar(self, f"«{perfil.nombre}» guardado")
 
     def _pintar_aviso_modo(self) -> None:
@@ -959,7 +963,10 @@ class PaginaRaton(QWidget):
             combo.blockSignals(False)
 
     def _tab_perfiles(self) -> QWidget:
-        return PanelPerfiles(self.raton, demo=self.demo)
+        # Se guarda la referencia para poder refrescarlo desde otras pestañas:
+        # guardar un ajuste en un perfil desde Ajustes tiene que verse aquí.
+        self.panel_perfiles = PanelPerfiles(self.raton, demo=self.demo)
+        return self.panel_perfiles
 
     def _tab_firmware(self) -> QWidget:
         tarjetas = []

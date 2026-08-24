@@ -903,6 +903,94 @@ def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
                 print(f"     ⚠ no se pudieron cerrar: {e}")
 
 
+def bloque_leds(s: Sonda) -> None:
+    """Vuelca lo que el ratón diga de sus luces. Sólo lee.
+
+    No sabemos aún cómo se decodifica: la idea es justo ésa, recoger volcados
+    de ratones con iluminación para deducirlo desde bytes reales, que es como
+    se sacó el formato de perfil 0x07.
+
+    Se piden sólo las funciones 0 y 1, que por convenio son consultas. Probar
+    números de función a ciegas puede escribir algo, y un volcado que va a
+    ejecutar gente con otro hardware no es sitio para arriesgarse.
+    """
+    titulo("ILUMINACIÓN — volcado para decodificar")
+
+    tiene_alguna = False
+    for fid, nombre in ((0x8070, "efectos LED"), (0x8071, "efectos RGB"),
+                        (0x1300, "control de LEDs")):
+        if not s.tiene(fid):
+            print(f"  0x{fid:04X} {nombre}: no lo expone este ratón")
+            continue
+        tiene_alguna = True
+        ver = s.tabla[fid].version
+        print(f"\n  0x{fid:04X} {nombre}  (v{ver})")
+        for func in (0x00, 0x01):
+            for params in (b"", b"\x00", b"\x00\x00"):
+                etiqueta = f"f{func} params {hx(params) or '(ninguno)'}"
+                s.mostrar(f"     {etiqueta}", fid, func, params)
+
+    # Los efectos guardados en el perfil onboard: cuatro bloques de 11 bytes.
+    if s.tiene(0x8100):
+        info = s.llamar(0x8100, 0x00)
+        if info:
+            tam = int.from_bytes(info[7:9], "big")
+            crudo = leer_sector(s, 1, tam)
+            if crudo and len(crudo) >= 252:
+                print("\n  Efectos guardados en el perfil (bytes 208 a 251):")
+                for i in range(4):
+                    trozo = crudo[208 + i * 11:219 + i * 11]
+                    print(f"     efecto {i}: {hx(trozo)}")
+                tiene_alguna = True
+
+    if not tiene_alguna:
+        print("\n  Este ratón no parece tener iluminación.")
+
+
+def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:
+    """Recoge todo lo que se puede leer, en un fichero para compartir.
+
+    Sirve para pedir ayuda: alguien con otro ratón lo ejecuta y manda el
+    fichero, y con eso se puede añadir soporte sin tener el aparato delante.
+    Es lo que hicimos aquí con los volcados del PRO X 2.
+
+    No escribe nada en el ratón. El fichero lleva el modelo y las respuestas
+    del protocolo; no hay nada personal en él.
+    """
+    import io
+    import contextlib
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        print(f"gpx2 — informe de dispositivo")
+        print(f"{nodo.id_str} · {nodo.name} · {nodo.path}")
+        print(f"{len(s.tabla)} features\n")
+        print("Features declaradas:")
+        for f in sorted(s.tabla.values(), key=lambda x: x.index):
+            marcas = [m for m, v in (("oculta", f.hidden), ("interna", f.internal),
+                                     ("obsoleta", f.obsolete)) if v]
+            print(f"  idx {f.index:>2}  0x{f.fid:04X} v{f.version}  {f.name}"
+                  + (f"  [{', '.join(marcas)}]" if marcas else ""))
+        bloque_bateria(s)
+        if s.tiene(0x8100):
+            bloque_perfiles_onboard(s)
+        if s.tiene(0x2202) or s.tiene(0x2201):
+            bloque_dpi(s)
+            bloque_rangos(s)
+        if s.tiene(0x8061):
+            bloque_tasa(s)
+        bloque_leds(s)
+
+    texto = buf.getvalue()
+    with open(ruta, "w", encoding="utf-8") as fh:
+        fh.write(texto)
+    print(texto)
+    print(f"\n{'=' * 72}")
+    print(f"  Informe guardado en {ruta}")
+    print("  Puedes mandarlo tal cual: no lleva nada personal, sólo el modelo")
+    print("  del ratón y lo que contesta al protocolo.")
+
+
 def bloque_medir(segundos: float) -> None:
     titulo("TASA REAL MEDIDA (no lo que el ratón dice, lo que hace)")
     punteros = punteros_del_sistema()
@@ -1663,6 +1751,11 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
+    ap.add_argument("--leds", action="store_true",
+                    help="vuelca lo que el ratón diga de su iluminación")
+    ap.add_argument("--informe", nargs="?", const="gpx2-informe.txt",
+                    metavar="FICHERO",
+                    help="recoge todo lo legible en un fichero para compartir")
     ap.add_argument("--poner-tasa", type=int, metavar="HZ",
                     help="cambia la tasa de reporte de verdad y la mide")
     ap.add_argument("--features-ocultas", action="store_true",
@@ -1727,6 +1820,16 @@ def main() -> int:
         return 1
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
+
+    if args.leds:
+        bloque_leds(s)
+        ch.close()
+        return 0
+
+    if args.informe:
+        bloque_informe(s, args.informe, node)
+        ch.close()
+        return 0
 
     if args.poner_tasa:
         bloque_poner_tasa(s, args.poner_tasa, args.medir or 5.0)

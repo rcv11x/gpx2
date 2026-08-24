@@ -170,17 +170,18 @@ class Demonio:
         if self._prefiere_onboard():
             return
 
-        # Sólo se repone cuando el ratón ha vuelto a mandar él: ésa es la firma
-        # de que se ha reiniciado por su cuenta. Si sigue en modo host, una
-        # diferencia con el perfil la ha hecho alguien a propósito —tú, o la
-        # interfaz— y reponerla sería pelearse con quien está usando el
-        # programa: mueves el DPI y cinco segundos después vuelve solo.
+        # Encontrar el ratón en onboard cuando has pedido host significa que se
+        # ha reiniciado por su cuenta: el modo ES la deriva, aunque los valores
+        # coincidan por casualidad, así que se repone sin más comprobaciones.
         onboard = self.raton.onboard
-        if onboard is not None and onboard.es_host():
+        if onboard is not None and not onboard.es_host():
+            self.aplicar(perfil, "el ratón había vuelto a sus ajustes")
             return
 
-        if self.motor.ha_derivado(perfil):
-            self.aplicar(perfil, "el ratón había vuelto a sus ajustes")
+        # En modo host no se toca nada: una diferencia con el perfil la ha
+        # hecho alguien a propósito —tú, o la interfaz— y reponerla sería
+        # pelearse con quien está usando el programa: mueves el DPI y cinco
+        # segundos después vuelve solo.
 
     def aplicar_por_defecto(self, motivo: str = "") -> None:
         perfil = self.almacen.por_defecto()

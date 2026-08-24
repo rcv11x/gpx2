@@ -173,6 +173,10 @@ class PaginaRaton(QWidget):
         super().__init__(parent)
         self.raton = raton
         self.demo = demo
+        # La tasa se recuerda en disco porque el ratón no informa de la suya;
+        # en modo demo va a otra carpeta, como los perfiles.
+        if raton.rate is not None and hasattr(raton.rate, "demo"):
+            raton.rate.demo = demo
         self.estado = raton.leer_todo()
         self.puntero_kde = desktop.buscar_puntero(raton.node.vid, raton.node.pid)
 

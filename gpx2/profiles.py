@@ -58,6 +58,42 @@ def guardar_modo_preferido(modo: str, demo: bool = False) -> None:
     ruta.write_text(modo + "\n", encoding="utf-8")
 
 
+def ruta_tasas(demo: bool = False) -> Path:
+    return directorio_perfiles(demo).parent / "tasas"
+
+
+def leer_tasa_recordada(id_dispositivo: str, demo: bool = False) -> int | None:
+    """La última tasa que le escribimos a este ratón.
+
+    Hace falta porque el ratón NO informa de la suya: su función de lectura
+    sigue devolviendo la que tenía al arrancar aunque el enlace haya cambiado.
+    Sin recordarlo, cada vez que se abre el programa enseñaría un valor que
+    sabemos falso.
+    """
+    try:
+        for linea in ruta_tasas(demo).read_text(encoding="utf-8").splitlines():
+            ident, _, hz = linea.partition(" ")
+            if ident == id_dispositivo and hz.strip().isdigit():
+                return int(hz)
+    except OSError:
+        pass
+    return None
+
+
+def guardar_tasa_recordada(id_dispositivo: str, hz: int,
+                           demo: bool = False) -> None:
+    ruta = ruta_tasas(demo)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    lineas = []
+    try:
+        lineas = [l for l in ruta.read_text(encoding="utf-8").splitlines()
+                  if not l.startswith(f"{id_dispositivo} ")]
+    except OSError:
+        pass
+    lineas.append(f"{id_dispositivo} {hz}")
+    ruta.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+
+
 @dataclass
 class Ajustes:
     """Lo que un perfil cambia. None = 'no lo toques'."""

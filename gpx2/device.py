@@ -68,6 +68,10 @@ class Mouse:
 
         self.dpi = self._primera(feat.DPI_CLASSES)
         self.rate = self._primera(feat.RATE_CLASSES)
+        if self.rate is not None and hasattr(self.rate, "id_dispositivo"):
+            # La tasa hay que recordarla en disco: el ratón no informa de la
+            # suya. Se guarda por dispositivo, no global.
+            self.rate.id_dispositivo = self.node.id_str
         self.battery = self._primera(feat.BATTERY_CLASSES)
         self.mode = self._primera([feat.ModeStatus])
         self.onboard = self._primera([feat.OnboardProfiles])

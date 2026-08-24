@@ -67,6 +67,10 @@ class Demonio:
         if self.raton is None:
             self.motor = None
             return False
+        # La tasa se recuerda en disco porque el ratón no informa de la suya;
+        # en modo demo va a otra carpeta, como los perfiles.
+        if self.raton.rate is not None and hasattr(self.raton.rate, "demo"):
+            self.raton.rate.demo = self.demo
         self.motor = Motor(self.raton)
         log.info("ratón: %s (%s)", self.raton.nombre, self.raton.conexion)
         return True

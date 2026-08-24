@@ -342,6 +342,28 @@ class ExtendedReportRate(Capability):
     def __init__(self, hpp):
         super().__init__(hpp)
         self._ultima: int | None = None
+        self.id_dispositivo: str = ""    # lo rellena Mouse al construirlo
+        self.demo: bool = False
+
+    def _recordar(self, hz: int) -> None:
+        self._ultima = hz
+        if self.id_dispositivo:
+            from .profiles import guardar_tasa_recordada
+            try:
+                guardar_tasa_recordada(self.id_dispositivo, hz, self.demo)
+            except OSError:
+                pass
+
+    def _recordada(self) -> int | None:
+        if self._ultima is not None:
+            return self._ultima
+        if not self.id_dispositivo:
+            return None
+        from .profiles import leer_tasa_recordada
+        try:
+            return leer_tasa_recordada(self.id_dispositivo, self.demo)
+        except OSError:
+            return None
 
     def _conexion_actual(self) -> int:
         """Por cable y por receptor el ratón admite tasas distintas."""
@@ -379,10 +401,11 @@ class ExtendedReportRate(Capability):
 
         idx = self.call(self.F_LEER)[0]
         actual = self.MAPEO_HZ[idx] if idx < len(self.MAPEO_HZ) else 0
-        # La función 2 no se entera de los cambios: si hemos escrito una tasa
-        # en esta sesión, vale más lo que escribimos que lo que contesta.
-        if self._ultima is not None:
-            actual = self._ultima
+        # La función 2 no se entera de los cambios: si alguna vez le hemos
+        # escrito una tasa a este ratón, vale más eso que lo que conteste.
+        recordada = self._recordada()
+        if recordada is not None:
+            actual = recordada
         return RateInfo(actual, aqui, alla)
 
     FID_OCULTAS = 0x1E00
@@ -428,7 +451,7 @@ class ExtendedReportRate(Capability):
         # descubrirlo, y sólo se ve cronometrando los informes que llegan al
         # kernel (`depurar.py --medir`). Se recuerda lo escrito para no
         # enseñar después un valor que sabemos que es falso.
-        self._ultima = hz
+        self._recordar(hz)
         if previo is None:
             # Sin 0x1E00 no hay forma de desbloquear, y ahí la función 2 sí
             # es el único indicio que tenemos.

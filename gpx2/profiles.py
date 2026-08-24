@@ -20,19 +20,25 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 
-def directorio_perfiles(demo: bool = False) -> Path:
-    """Dónde viven los perfiles.
+def directorio_estado(demo: bool = False) -> Path:
+    """La carpeta con todo lo que el programa recuerda.
 
-    El modo demo usa una carpeta aparte a propósito: el ratón simulado no debe
-    ensuciar la configuración real con ajustes que no ha dado ningún
-    dispositivo tuyo.
+    El modo demo cuelga de una subcarpeta propia, no sólo con otros perfiles:
+    el modo elegido y la frecuencia recordada también son estado, y
+    compartirlos significaba que ejecutar las pruebas le cambiaba a alguien la
+    configuración de su ratón de verdad.
     """
     base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
-    return Path(base) / "gpx2" / ("profiles-demo" if demo else "profiles")
+    raiz = Path(base) / "gpx2"
+    return raiz / "demo" if demo else raiz
+
+
+def directorio_perfiles(demo: bool = False) -> Path:
+    return directorio_estado(demo) / "profiles"
 
 
 def ruta_modo(demo: bool = False) -> Path:
-    return directorio_perfiles(demo).parent / "modo"
+    return directorio_estado(demo) / "modo"
 
 
 def leer_modo_preferido(demo: bool = False) -> str | None:
@@ -59,7 +65,7 @@ def guardar_modo_preferido(modo: str, demo: bool = False) -> None:
 
 
 def ruta_tasas(demo: bool = False) -> Path:
-    return directorio_perfiles(demo).parent / "tasas"
+    return directorio_estado(demo) / "tasas"
 
 
 def leer_tasa_recordada(id_dispositivo: str, demo: bool = False) -> int | None:

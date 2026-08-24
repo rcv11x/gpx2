@@ -126,29 +126,48 @@ kernel vaya perfecto: son dos capas distintas.
 
 ---
 
-## 3. La decisión de arquitectura más importante: perfiles en el HOST
+## 3. Dos sitios donde puede vivir la configuración, y los dos se usan
 
-El ratón tiene memoria interna con ~5 perfiles ("onboard profiles", feature
-0x8100). G HUB los usa. Es tentador copiarlo. **No lo hagas, al menos de entrada.**
+> **Actualizado tras validar contra hardware.** Lo que sigue describía la
+> memoria onboard como territorio sin documentar y desaconsejaba tocarla. Ya
+> no: el formato **0x07** está decodificado en `PROTOCOLO.md` y escribirlo
+> funciona, probado en un PRO X 2.
 
-|  | Perfiles ONBOARD (en el ratón) | Perfiles HOST (en tu PC) |
+El ratón tiene memoria interna con cinco perfiles (feature `0x8100`). Y el PC
+puede mandarle ajustes en caliente. **No son alternativas, son cosas
+distintas**, y gpx2 usa las dos:
+
+|  | Memoria del ratón | Perfiles en el PC |
 |---|---|---|
-| Cuántos | 5, tamaño fijo | Ilimitados |
-| Formato | Binario propietario, *layout 0x06* sin documentar | TOML que escribes tú |
-| Riesgo | Escribir mal la memoria = ratón raro / brickeo parcial | Ninguno, se aplica en caliente |
-| Cambio por juego | Hay que precargar y conmutar | Aplicas los ajustes al vuelo |
-| Es donde libratbag se ha atascado | **Sí** | No |
+| Dónde vive | flash del dispositivo | TOML en `~/.config/gpx2/` |
+| Cuántos | cinco, tamaño fijo | ilimitados |
+| Sobrevive a apagarlo | **sí** | no |
+| Funciona en otro PC, sin software | **sí** | no |
+| Cambia solo al arrancar un juego | no | **sí** |
+| Configura los botones | **sí** | sólo si el ratón expone `0x1B04` |
+| Ciclos de escritura | limitados: se escribe cuando toca | ninguno, es un fichero |
 
-**Modo host** = pones el ratón en modo "me controla el PC" (feature 0x8090
-ModeStatus) y le vas mandando DPI, Hz y remapeos según haga falta. Es más
-sencillo, más seguro, y encaja perfectamente con "un perfil por juego".
+**Los perfiles por juego siguen viviendo en el PC**, porque el cambio en
+caliente es lo que permite que salten al abrir un juego. La memoria del ratón
+es para lo que debe sobrevivir a apagarlo: la pestaña "Memoria del ratón" la
+edita.
 
-*Contrapartida honesta:* la configuración vive en tu PC, no en el ratón. Si
-arrancas Windows o lo enchufas a otro equipo, vuelve a su configuración interna.
-Para tu caso de uso eso da igual.
+### El modo decide quién manda
 
-Escribir perfiles onboard queda como **Fase 6**, opcional, cuando ya entiendas
-el formato y tengas todo lo demás funcionando.
+`0x8100` función 1: `0x01` onboard, `0x02` host. **No es `0x8090`**, que es
+sólo informativa y cuya escritura este ratón rechaza.
+
+- **onboard** — manda el perfil del dispositivo. Nuestras escrituras de DPI se
+  rechazan con error interno (`0x05`).
+- **host** — mandamos nosotros, y **nada persiste**: al apagar el ratón vuelve
+  a lo que diga su perfil interno.
+
+El modo host **tampoco persiste**, así que hay que asegurarlo antes de cada
+escritura (`Mouse.asegurar_host()`), no una vez al arrancar.
+
+La elección del usuario se guarda en `~/.config/gpx2/modo` y el demonio la
+respeta: sin eso, deshacía la elección cada cinco segundos creyendo que el
+ratón se había reiniciado solo.
 
 ---
 
@@ -230,6 +249,36 @@ el estado actual del ratón: sólo se manda por HID++ lo que ha cambiado.
 Ver sección 5.
 
 ---
+
+
+### Módulos que se añadieron después
+
+- **`onboard.py`** — decodifica y compone los perfiles de la memoria del ratón
+  (formato 0x07). Regla que sigue entero: al escribir se parte del sector que
+  el ratón ya tenía y sólo se sustituyen los campos conocidos. Hay trozos sin
+  identificar, y reconstruirlos desde cero sería inventarlos. Una comprobación
+  vigila que leer y reescribir sin cambios dé el sector idéntico.
+- **`procesos.py`** — qué hay corriendo y cuáles de esas cosas parecen un
+  juego, más los juegos de Steam instalados leyendo sus manifiestos. Existe
+  para que nadie tenga que saberse el nombre del ejecutable de su juego.
+- **`gui/dialogos.py`** — el selector de juegos, con carátulas de la caché
+  local de Steam.
+- **`cli.py`** — los puntos de entrada de los dos ejecutables. Un «console
+  script» se llama sin argumentos y tanto la interfaz como el demonio quieren
+  mirar la línea de órdenes.
+
+### Dónde se guarda el estado
+
+Todo cuelga de `~/.config/gpx2/`, y el **modo demo usa la subcarpeta `demo/`**
+para no pisarlo:
+
+| | Qué |
+|---|---|
+| `profiles/` | los perfiles por juego, en TOML |
+| `modo` | onboard u host, la elección del usuario |
+| `tasas` | la última frecuencia escrita a cada ratón, porque el dispositivo no informa de la suya |
+| `respaldo/` | copia del sector de perfil antes de escribirlo |
+
 
 ## 5. ¿Por qué un daemon separado y no una sola app?
 

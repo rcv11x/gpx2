@@ -28,7 +28,24 @@ def comprobar(condicion, descripcion):
         fallos.append(descripcion)
 
 
+def limpiar_estado_demo() -> None:
+    """Borra lo que dejaron ejecuciones anteriores.
+
+    Sin esto la primera pasada tras un cambio podía fallar y las siguientes
+    no: arrastraba el modo o la frecuencia que había guardado la anterior. Una
+    prueba que depende de lo que pasó antes no sirve para nada.
+
+    Sólo toca la carpeta del modo demo; la configuración real no se roza.
+    """
+    import shutil
+    from gpx2.profiles import directorio_estado
+    carpeta = directorio_estado(demo=True)
+    if carpeta.name == "demo" and carpeta.is_dir():
+        shutil.rmtree(carpeta, ignore_errors=True)
+
+
 def main() -> int:
+    limpiar_estado_demo()
     print("1. Protocolo y modelo de dispositivo")
     raton = raton_simulado()
     estado = raton.leer_todo()
@@ -167,6 +184,13 @@ def main() -> int:
     comprobar(releido.niveles[1].x == 1500, "y un nivel de DPI")
 
     print("7. El modo lo elige el usuario, no el demonio")
+    # El estado del modo demo tiene que estar aparte del real: si compartieran
+    # fichero, ejecutar estas pruebas cambiaría la configuración del ratón de
+    # quien las lanza.
+    from gpx2.profiles import ruta_modo, ruta_tasas
+    comprobar(ruta_modo(True) != ruta_modo(False)
+              and ruta_tasas(True) != ruta_tasas(False),
+              "el estado del demo no pisa el real")
     from gpx2.profiles import guardar_modo_preferido, leer_modo_preferido
     with tempfile.TemporaryDirectory() as tmp:
         ruta = Path(tmp) / "modo"

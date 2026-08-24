@@ -834,8 +834,8 @@ class PaginaRaton(QWidget):
 
     def _copia_sector(self) -> str:
         """Guarda el sector original antes de tocarlo, y devuelve la ruta."""
-        from ..profiles import directorio_perfiles
-        carpeta = directorio_perfiles(self.demo).parent / "respaldo"
+        from ..profiles import directorio_estado
+        carpeta = directorio_estado(self.demo) / "respaldo"
         carpeta.mkdir(parents=True, exist_ok=True)
         ruta = carpeta / f"{self.raton.id_str}-sector1.bin"
         ruta.write_bytes(self._sector_ob)

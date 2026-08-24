@@ -60,6 +60,11 @@ class Modelo:
 
     botones: list[tuple] = field(default_factory=list)   # 0x1B04
 
+    # Respuestas de 0x8071 f0, indexadas por los parámetros con que se pregunta.
+    # Se guardan crudas: de esta feature aún no sabemos bastante como para
+    # darle estructura, y un volcado literal no se equivoca.
+    rgb: dict[bytes, bytes] = field(default_factory=dict)
+
     @property
     def formato_perfil(self) -> int:
         return self.info_onboard[1] if len(self.info_onboard) > 1 else 0
@@ -151,12 +156,11 @@ SL2 = Modelo(
 # Copiado del volcado: la tabla de features con sus marcas, el sector de perfil
 # entero —con su CRC, que nos cuadra— y la información de 0x8100.
 #
-# PROVISIONAL, a la espera del segundo informe: las respuestas de 0x2201 y
-# 0x8060 (aquel informe aún no las pedía) y las de 0x8071 (se preguntaban con
-# los parámetros a cero, y contestaba ceros). Los valores de abajo se han
-# DEDUCIDO del perfil onboard, que sí es real: sus niveles son 400/800/1600/
-# 3200 y su periodo es de 1 ms. Sirven para ejercitar el código; no valen como
-# referencia de protocolo hasta que lleguen los bytes de verdad.
+# Todo lo de aquí sale de volcados: los dos informes del 25-08-2026. Lo que en
+# la primera versión estaba deducido del perfil —la lista de DPI y el bitmap de
+# periodos— resultó coincidir byte a byte con lo que contestó el ratón, pero
+# eso fue suerte y no cambia la regla: los provisionales se sustituyen por el
+# volcado en cuanto llega, no se dan por buenos porque parezcan razonables.
 
 def _sector(lineas: dict[int, str], tam: int = 255) -> bytes:
     """Reconstruye un sector desde las líneas de un volcado.
@@ -196,14 +200,13 @@ G203 = Modelo(
     tipos={0x1801: 0x60, 0x1802: 0x60, 0x1806: 0x60, 0x1E00: 0x40,
            0x1E22: 0x60, 0x1EB0: 0x60, 0x18B1: 0x60, 0x18A1: 0x60},
     versiones={0x0003: 2, 0x1806: 5, 0x2201: 1},
-    dpi_actual=800, dpi_defecto=800,
+    # El ratón venía a 3200, aunque su perfil diga que por defecto son 800.
+    dpi_actual=3200, dpi_defecto=800,
     dpi_niveles=[400, 800, 1600, 3200],
-    # PROVISIONAL: 0x2201 f1 declara un rango continuo. Los extremos salen de
-    # la hoja del producto (200 a 8000, paso 50), no de un volcado.
-    dpi_lista=bytes([0x00]) + b"\x00\xc8" + b"\xe0\x32" + b"\x1f\x40" + b"\x00\x00",
-    # bits 0,1,3,7 = periodos de 1, 2, 4 y 8 ms = 1000/500/250/125 Hz, que es
-    # la escalera de siempre. PROVISIONAL: el bitmap real no está volcado.
-    ms_bitmap=0b10001011,
+    # 0x2201 f1: rango continuo de 200 a 8000 DPI. El 0xE032 del medio no es un
+    # valor sino el paso (50): lleva los tres bits altos puestos.
+    dpi_lista=bytes.fromhex("0000c8e0321f400000"),
+    ms_bitmap=0x8B,                 # 1, 2, 4 y 8 ms = 1000/500/250/125 Hz
     ms_actual=1,                    # del perfil onboard: 1 ms = 1000 Hz
     bateria=None,                   # va por cable
     # [memoria, formato_perfil, formato_macro, nº perfiles, fuera de caja,
@@ -214,6 +217,13 @@ G203 = Modelo(
     directorio=bytes.fromhex("00010100") + b"\xff" * 12,
     sector_perfil=_G203_SECTOR,
     botones=[],                     # no expone 0x1B04: se configuran por perfil
+    # 0x8071 f0: una sola zona de luz, con siete efectos. Los dos primeros
+    # bytes de cada respuesta son el eco de lo preguntado; la cuenta de zonas
+    # va en el tercero, y la de efectos en el quinto de la respuesta de zona.
+    rgb={
+        b"\xff\xff\x00": bytes.fromhex("ff00010003000400") + bytes(8),
+        b"\x00\xff\x00": bytes.fromhex("0000000207010000") + bytes(8),
+    },
 )
 
 

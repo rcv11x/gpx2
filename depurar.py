@@ -903,6 +903,18 @@ def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
                 print(f"     ⚠ no se pudieron cerrar: {e}")
 
 
+def nombre_efecto(ident: int) -> str:
+    """Nombre tentativo de un identificador de efecto de 0x8071.
+
+    Sin confirmar: hasta que un ratón no diga "tengo el 0x0003" con la luz a la
+    vista, esto son etiquetas para orientarse en el volcado, no protocolo.
+    """
+    return {0x0000: "(apagado)", 0x0001: "(¿color fijo?)",
+            0x0002: "(¿respiración?)", 0x0003: "(¿ciclo de color?)",
+            0x0004: "(¿onda?)", 0x0005: "(¿starlight?)",
+            0x000A: "(¿respiración?)", 0x000B: "(¿ripple?)"}.get(ident, "")
+
+
 def bloque_dpi_clasico(s: Sonda) -> None:
     """DPI por 0x2201, la feature anterior a 0x2202.
 
@@ -916,13 +928,23 @@ def bloque_dpi_clasico(s: Sonda) -> None:
     s.mostrar("f0  getSensorCount", 0x2201, 0x00)
     lista = s.mostrar("f1  getSensorDpiList(0)", 0x2201, 0x01, b"\x00")
     if lista:
-        # El flujo son u16: un valor suelto es un DPI admitido, y un valor con
-        # el bit alto puesto abre un tramo "desde-hasta-cada".
-        valores = [int.from_bytes(lista[i:i + 2], "big")
-                   for i in range(1, len(lista) - 1, 2)]
-        valores = [v for v in valores if v]
-        if valores:
-            print(f"      → valores declarados: {valores}")
+        # Los u16 con los tres bits altos puestos (máscara 0xE000) NO son un
+        # DPI: son el paso entre el valor anterior y el siguiente. Tratarlos
+        # como valores daba "57394 DPI", que no existe en ningún sensor.
+        valores, paso = [], 0
+        for i in range(1, len(lista) - 1, 2):
+            v = int.from_bytes(lista[i:i + 2], "big")
+            if v == 0:
+                break
+            if (v & 0xE000) == 0xE000:
+                paso = v & 0x1FFF
+            else:
+                valores.append(v)
+        if paso and len(valores) >= 2:
+            print(f"      → rango continuo: de {min(valores)} a {max(valores)} "
+                  f"DPI, de {paso} en {paso}")
+        elif valores:
+            print(f"      → valores sueltos: {valores}")
 
     actual = s.mostrar("f2  getSensorDpi(0)  ← el DPI de ahora", 0x2201, 0x02,
                        b"\x00")
@@ -972,24 +994,28 @@ def bloque_leds(s: Sonda) -> None:
     if s.tiene(0x8071):
         tiene_alguna = True
         print(f"\n  0x8071 efectos RGB  (v{s.tabla[0x8071].version})")
+        # La función 0 es getInfo(zona, efecto, tipo), y 0xFF significa
+        # "háblame de ti en general". Los dos primeros bytes de la respuesta
+        # son el eco de lo preguntado: la cuenta empieza en el tercero.
         general = s.mostrar("     f0  info general (FF FF 00)", 0x8071, 0x00,
                             b"\xff\xff\x00")
-        n_zonas = general[0] if general else 0
-        if general:
-            print(f"      → zonas de luz declaradas: {n_zonas}")
+        n_zonas = general[2] if general and len(general) > 2 else 0
+        print(f"      → zonas de luz: {n_zonas}")
 
-        for zona in range(max(n_zonas, 1) if n_zonas else 0):
+        for zona in range(min(n_zonas, 8)):
             info = s.mostrar(f"     f0  zona {zona} ({zona:02X} FF 00)",
                              0x8071, 0x00, bytes([zona, 0xFF, 0x00]))
-            if not info:
+            if not info or len(info) < 5:
                 continue
-            n_efectos = info[2] if len(info) > 2 else 0
-            print(f"      → efectos que admite la zona {zona}: {n_efectos}")
-            for efecto in range(min(n_efectos, 12)):
-                r = s.mostrar(f"     f0  zona {zona} efecto {efecto}",
-                              0x8071, 0x00, bytes([zona, efecto, 0x00]))
-                if r and len(r) > 3:
-                    print(f"      → id de efecto 0x{int.from_bytes(r[2:4], 'big'):04X}")
+            sitio = int.from_bytes(info[2:4], "big")
+            n_efectos = info[4]
+            print(f"      → sitio 0x{sitio:04X}   ·   efectos que admite: {n_efectos}")
+            for efecto in range(min(n_efectos, 16)):
+                r_ = s.mostrar(f"     f0  zona {zona}, efecto {efecto}",
+                               0x8071, 0x00, bytes([zona, efecto, 0x00]))
+                if r_ and len(r_) > 3:
+                    ident = int.from_bytes(r_[2:4], "big")
+                    print(f"      → identificador 0x{ident:04X}  {nombre_efecto(ident)}")
     else:
         print("  0x8071 efectos RGB: no lo expone este ratón")
 

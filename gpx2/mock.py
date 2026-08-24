@@ -214,11 +214,15 @@ class CanalSimulado:
                 return params[0:5]
 
         if fid == 0x8071:                                   # efectos RGB
-            # Aún sin decodificar. Lo único medido es que el G203 contesta
-            # dieciséis ceros cuando se le pregunta con los parámetros a cero.
-            # Se reproduce tal cual; lo que daría con 0xFF no se inventa.
-            if func == 0x00 and not any(params):
-                return bytes(16)
+            # Sin decodificar del todo: se sirven los volcados que hay, tal
+            # cual, y lo que no se preguntó se responde con "parámetro
+            # inválido", que es lo que contesta el ratón de verdad.
+            if func == 0x00:
+                clave = bytes(params[:3])
+                if clave in m.rgb:
+                    return m.rgb[clave]
+                if not any(clave):
+                    return bytes(16)        # con ceros contesta ceros
             raise KeyError((fid, func))
 
         if fid == 0x8090 and func == 0x00:                  # modo

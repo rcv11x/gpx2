@@ -214,6 +214,14 @@ def main() -> int:
     comprobar(describir_boton(pg.botones[3]) == "Atrás",
               "los botones se leen igual en las dos disposiciones")
     comprobar(escribir_perfil(pg) == crudo_g, "ida y vuelta sin tocar nada")
+    # 0x8071 se pregunta con 0xFF, y la cuenta no está donde parece: los dos
+    # primeros bytes de la respuesta son el eco de lo preguntado. Leerla en el
+    # sitio equivocado hizo creer que el ratón tenía 255 zonas de luz, y el
+    # informe salió con 254 líneas de error.
+    gen = g.hpp.call(g.hpp.of(0x8071), 0x00, b"\xff\xff\x00")
+    comprobar(gen[2] == 1, "0x8071 declara una sola zona de luz")
+    z0 = g.hpp.call(g.hpp.of(0x8071), 0x00, b"\x00\xff\x00")
+    comprobar(z0[4] == 7, "y que esa zona admite siete efectos")
 
     print("8. El modo lo elige el usuario, no el demonio")
     # El estado del modo demo tiene que estar aparte del real: si compartieran

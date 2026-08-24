@@ -903,48 +903,150 @@ def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
                 print(f"     ⚠ no se pudieron cerrar: {e}")
 
 
+def bloque_dpi_clasico(s: Sonda) -> None:
+    """DPI por 0x2201, la feature anterior a 0x2202.
+
+    Los ratones que no llevan 0x2202 —el G203, por ejemplo— usan ésta: un solo
+    eje, sin distancia de despegue, y la lista de valores admitidos viene
+    entera en una respuesta en vez de en un flujo paginado.
+    """
+    titulo("DPI (0x2201, la feature clásica)")
+    print(f"  versión de la feature en este ratón: v{s.tabla[0x2201].version}\n")
+
+    s.mostrar("f0  getSensorCount", 0x2201, 0x00)
+    lista = s.mostrar("f1  getSensorDpiList(0)", 0x2201, 0x01, b"\x00")
+    if lista:
+        # El flujo son u16: un valor suelto es un DPI admitido, y un valor con
+        # el bit alto puesto abre un tramo "desde-hasta-cada".
+        valores = [int.from_bytes(lista[i:i + 2], "big")
+                   for i in range(1, len(lista) - 1, 2)]
+        valores = [v for v in valores if v]
+        if valores:
+            print(f"      → valores declarados: {valores}")
+
+    actual = s.mostrar("f2  getSensorDpi(0)  ← el DPI de ahora", 0x2201, 0x02,
+                       b"\x00")
+    if actual and len(actual) >= 5:
+        print(f"      → DPI actual: {int.from_bytes(actual[1:3], 'big')}"
+              f"   ·   por defecto: {int.from_bytes(actual[3:5], 'big')}")
+
+
+def bloque_tasa_clasica(s: Sonda) -> None:
+    """Tasa de reporte por 0x8060, la feature anterior a 0x8061.
+
+    Aquí la tasa es el periodo en milisegundos, no un índice: 1 ms son 1000 Hz.
+    Es el tope de esta feature, y por eso los ratones que pasan de ahí llevan
+    la 0x8061.
+    """
+    titulo("TASA DE REPORTE (0x8060, la feature clásica)")
+
+    r = s.mostrar("f0  getReportRateList", 0x8060, 0x00)
+    if r:
+        admitidas = [1000 // ms for ms in range(1, 9)
+                     if r[0] & (1 << (ms - 1)) and 1000 % ms == 0]
+        print(f"      → admite: {sorted(admitidas, reverse=True)} Hz")
+
+    r = s.mostrar("f1  getReportRate  ← la tasa de ahora", 0x8060, 0x01)
+    if r and r[0]:
+        print(f"      → {r[0]} ms = {1000 // r[0]} Hz")
+
+
 def bloque_leds(s: Sonda) -> None:
     """Vuelca lo que el ratón diga de sus luces. Sólo lee.
 
-    No sabemos aún cómo se decodifica: la idea es justo ésa, recoger volcados
-    de ratones con iluminación para deducirlo desde bytes reales, que es como
-    se sacó el formato de perfil 0x07.
+    Aún no está decodificado: la idea es justo ésa, recoger volcados de ratones
+    con iluminación para deducirlo desde bytes reales, que es como se sacó el
+    formato de perfil 0x07.
 
-    Se piden sólo las funciones 0 y 1, que por convenio son consultas. Probar
-    números de función a ciegas puede escribir algo, y un volcado que va a
-    ejecutar gente con otro hardware no es sitio para arriesgarse.
+    Sólo se piden funciones de consulta. Probar números de función a ciegas
+    puede escribir algo, y un volcado que va a ejecutar gente con otro hardware
+    no es sitio para arriesgarse.
     """
     titulo("ILUMINACIÓN — volcado para decodificar")
 
     tiene_alguna = False
-    for fid, nombre in ((0x8070, "efectos LED"), (0x8071, "efectos RGB"),
-                        (0x1300, "control de LEDs")):
+
+    # 0x8071 se consulta con la función 0, pero hay que decirle QUÉ se pregunta:
+    # 0xFF significa "háblame de ti". Con ceros contesta ceros, que fue lo que
+    # despistó en el primer informe que llegó.
+    if s.tiene(0x8071):
+        tiene_alguna = True
+        print(f"\n  0x8071 efectos RGB  (v{s.tabla[0x8071].version})")
+        general = s.mostrar("     f0  info general (FF FF 00)", 0x8071, 0x00,
+                            b"\xff\xff\x00")
+        n_zonas = general[0] if general else 0
+        if general:
+            print(f"      → zonas de luz declaradas: {n_zonas}")
+
+        for zona in range(max(n_zonas, 1) if n_zonas else 0):
+            info = s.mostrar(f"     f0  zona {zona} ({zona:02X} FF 00)",
+                             0x8071, 0x00, bytes([zona, 0xFF, 0x00]))
+            if not info:
+                continue
+            n_efectos = info[2] if len(info) > 2 else 0
+            print(f"      → efectos que admite la zona {zona}: {n_efectos}")
+            for efecto in range(min(n_efectos, 12)):
+                r = s.mostrar(f"     f0  zona {zona} efecto {efecto}",
+                              0x8071, 0x00, bytes([zona, efecto, 0x00]))
+                if r and len(r) > 3:
+                    print(f"      → id de efecto 0x{int.from_bytes(r[2:4], 'big'):04X}")
+    else:
+        print("  0x8071 efectos RGB: no lo expone este ratón")
+
+    for fid, nombre in ((0x8070, "efectos LED"), (0x1300, "control de LEDs")):
         if not s.tiene(fid):
             print(f"  0x{fid:04X} {nombre}: no lo expone este ratón")
             continue
         tiene_alguna = True
-        ver = s.tabla[fid].version
-        print(f"\n  0x{fid:04X} {nombre}  (v{ver})")
+        print(f"\n  0x{fid:04X} {nombre}  (v{s.tabla[fid].version})")
         for func in (0x00, 0x01):
-            for params in (b"", b"\x00", b"\x00\x00"):
-                etiqueta = f"f{func} params {hx(params) or '(ninguno)'}"
-                s.mostrar(f"     {etiqueta}", fid, func, params)
+            for params in (b"", b"\x00", b"\xff\xff\x00"):
+                s.mostrar(f"     f{func} params {hx(params) or '(ninguno)'}",
+                          fid, func, params)
 
-    # Los efectos guardados en el perfil onboard: cuatro bloques de 11 bytes.
+    # Los efectos guardados en el perfil onboard. En la disposición clásica son
+    # dos bloques de 11 bytes desde el byte 208; el 0x07 reserva sitio para más.
     if s.tiene(0x8100):
         info = s.llamar(0x8100, 0x00)
         if info:
+            clasico = info[1] < 0x07
+            cuantos = 2 if clasico else 4
             tam = int.from_bytes(info[7:9], "big")
             crudo = leer_sector(s, 1, tam)
-            if crudo and len(crudo) >= 252:
-                print("\n  Efectos guardados en el perfil (bytes 208 a 251):")
-                for i in range(4):
+            if crudo and len(crudo) >= 208 + cuantos * 11:
+                print(f"\n  Efectos guardados en el perfil, desde el byte 208 "
+                      f"({cuantos} bloques de 11 bytes):")
+                for i in range(cuantos):
                     trozo = crudo[208 + i * 11:219 + i * 11]
-                    print(f"     efecto {i}: {hx(trozo)}")
+                    print(f"     efecto {i}: {hx(trozo)}   {describir_efecto(trozo)}")
                 tiene_alguna = True
 
     if not tiene_alguna:
         print("\n  Este ratón no parece tener iluminación.")
+
+
+def describir_efecto(b: bytes) -> str:
+    """Interpretación PROVISIONAL de un bloque de efecto de 11 bytes.
+
+    El primer byte es el tipo; el resto depende del tipo y aún no está
+    confirmado. Se marca como hipótesis a propósito: hasta que no haya dos
+    volcados del mismo ratón con efectos distintos, esto son conjeturas y no
+    debe tratarse de otra forma.
+    """
+    if not b or len(b) < 11:
+        return ""
+    if all(x == 0xFF for x in b):
+        return "(sin usar)"
+    tipo = b[0]
+    if tipo == 0x00:
+        return "apagado"
+    rgb = f"#{b[1]:02X}{b[2]:02X}{b[3]:02X}"
+    nombres = {0x01: "color fijo", 0x02: "respiración", 0x03: "ciclo de color",
+               0x04: "¿onda de color?", 0x05: "¿starlight?", 0x0A: "¿respiración?"}
+    hipotesis = nombres.get(tipo, f"tipo 0x{tipo:02X} desconocido")
+    if tipo == 0x01:
+        return f"{hipotesis} {rgb}"
+    return f"{hipotesis}  (color {rgb}, resto sin descifrar)"
 
 
 def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:
@@ -974,11 +1076,15 @@ def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:
         bloque_bateria(s)
         if s.tiene(0x8100):
             bloque_perfiles_onboard(s)
-        if s.tiene(0x2202) or s.tiene(0x2201):
+        if s.tiene(0x2202):
             bloque_dpi(s)
             bloque_rangos(s)
+        elif s.tiene(0x2201):
+            bloque_dpi_clasico(s)
         if s.tiene(0x8061):
             bloque_tasa(s)
+        elif s.tiene(0x8060):
+            bloque_tasa_clasica(s)
         bloque_leds(s)
 
     texto = buf.getvalue()
@@ -1395,9 +1501,13 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
     print(f"  formato de perfil: 0x{info[1]:02X}   ·   perfiles: {n_perfiles}"
           f"   ·   botones: {botones}")
     print(f"  sectores: {sectores}   ·   tamaño de sector: {tam} bytes")
-    if info[1] != 0x06:
-        print(f"  OJO: el formato 0x{info[1]:02X} es más nuevo que el 0x06 que")
-        print("  parsea Solaar, así que la disposición puede no coincidir.")
+    formato = info[1]
+    # El 0x07 del PRO X 2 cambió la disposición de la cabecera: la tasa pasó de
+    # milisegundos a un índice de la tabla de 0x8061, y cada nivel de DPI ganó
+    # su segundo eje y su distancia de despegue. Los formatos anteriores llevan
+    # la disposición clásica. Los botones, en cambio, son iguales en ambos.
+    clasico = formato < 0x07
+    print(f"  disposición: {'clásica (tasa en ms, DPI de un solo eje)' if clasico else 'nueva del 0x07 (tasa por índice, DPI con dos ejes)'}")
 
     def leer(sector: int, desp: int) -> bytes | None:
         return s.llamar(0x8100, 0x05,
@@ -1472,21 +1582,40 @@ def bloque_perfiles_onboard(s: Sonda) -> None:
         # despegue.
         MAPEO_HZ = [125, 250, 500, 1000, 2000, 4000, 8000]
 
-        def hz(i: int) -> str:
-            return f"{MAPEO_HZ[i]} Hz" if i < len(MAPEO_HZ) else f"índice {i}?"
+        if clasico:
+            # El primer byte es el periodo en milisegundos, no un índice: 1 ms
+            # son 1000 Hz. Después van el nivel por defecto, el nivel al que
+            # salta el botón de DPI, y cinco niveles de un solo eje.
+            ms = crudo[0]
+            print(f"\n     tasa guardada:      {ms} ms"
+                  + (f" = {1000 // ms} Hz" if ms else " (sin fijar)"))
+            print(f"     nivel de DPI por defecto: {crudo[1]}"
+                  f"   ·   nivel del botón de DPI: {crudo[2]}")
+            for i in range(5):
+                o = 3 + i * 2
+                if o + 1 >= len(crudo):
+                    break
+                dpi = int.from_bytes(crudo[o:o + 2], "little")
+                if dpi in (0, 0xFFFF):
+                    continue
+                marca = "  ← por defecto" if i == crudo[1] else ""
+                print(f"     nivel {i}: {dpi:>5} DPI{marca}")
+        else:
+            def hz(i: int) -> str:
+                return f"{MAPEO_HZ[i]} Hz" if i < len(MAPEO_HZ) else f"índice {i}?"
 
-        print(f"\n     tasa guardada:      índice {crudo[0]} = {hz(crudo[0])}")
-        print(f"     segunda tasa:       índice {crudo[1]} = {hz(crudo[1])}"
-              "   (¿la de la otra vía?)")
-        print(f"     nivel de DPI por defecto: {crudo[2]}   ·   b[3]: {crudo[3]}")
-        for i in range(5):
-            o = 4 + i * 5
-            if o + 4 >= len(crudo):
-                break
-            x = int.from_bytes(crudo[o:o + 2], "little")
-            y = int.from_bytes(crudo[o + 2:o + 4], "little")
-            marca = "  ← por defecto" if i == crudo[2] else ""
-            print(f"     nivel {i}: X={x:>5}  Y={y:>5}  despegue={crudo[o + 4]}{marca}")
+            print(f"\n     tasa guardada:      índice {crudo[0]} = {hz(crudo[0])}")
+            print(f"     segunda tasa:       índice {crudo[1]} = {hz(crudo[1])}"
+                  "   (¿la de la otra vía?)")
+            print(f"     nivel de DPI por defecto: {crudo[2]}   ·   b[3]: {crudo[3]}")
+            for i in range(5):
+                o = 4 + i * 5
+                if o + 4 >= len(crudo):
+                    break
+                x = int.from_bytes(crudo[o:o + 2], "little")
+                y = int.from_bytes(crudo[o + 2:o + 4], "little")
+                marca = "  ← por defecto" if i == crudo[2] else ""
+                print(f"     nivel {i}: X={x:>5}  Y={y:>5}  despegue={crudo[o + 4]}{marca}")
 
         if not habilitado:
             continue

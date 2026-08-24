@@ -236,7 +236,12 @@ def main() -> int:
 
     print()
     if fallos:
-        print(f"{len(fallos)} comprobación(es) fallida(s)")
+        # Repetidas al final a propósito: la línea del fallo queda enterrada
+        # entre sesenta [ok], y quien mira la salida por una tubería suele ver
+        # sólo el resumen. Un fallo que no dice cuál es no sirve de nada.
+        print(f"{len(fallos)} comprobación(es) fallida(s):")
+        for f in fallos:
+            print(f"  · {f}")
         return 1
     print("todo correcto")
     return 0

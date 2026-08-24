@@ -1,0 +1,14 @@
+# Da acceso al canal HID++ de los dispositivos Logitech al usuario que tiene
+# la sesión gráfica activa (mediante ACL, no hace falta grupo ni chmod).
+#
+# Instalar:
+#   sudo cp 99-logitech-hidpp.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   (y desconecta/reconecta el receptor)
+
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", TAG+="uaccess"
+
+# Si prefieres restringir sólo al G Pro X Superlight 2, comenta la línea de
+# arriba y descomenta estas dos:
+#KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c09b", TAG+="uaccess"
+#KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c54d", TAG+="uaccess"

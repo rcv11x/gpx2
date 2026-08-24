@@ -1,0 +1,18 @@
+[Unit]
+Description=gpx2 — perfiles de ratón por juego
+Documentation=https://github.com/rcv11x/gpx2
+# Sólo tiene sentido con sesión gráfica: usa D-Bus de sesión.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gpx2d
+Restart=on-failure
+RestartSec=5
+# No necesita privilegios: el acceso al ratón lo da la regla udev.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target

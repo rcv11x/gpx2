@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.egg-info/
+captura_*.png
+icono_preview.png

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=gpx2
+GenericName=Configuración de ratón
+Comment=Configura ratones Logitech por HID++, con perfiles por juego
+Exec=gpx2
+Icon=io.github.rcv11x.gpx2
+Terminal=false
+Categories=Settings;HardwareSettings;Utility;
+Keywords=raton;mouse;logitech;dpi;hid;perfil;
+StartupNotify=true

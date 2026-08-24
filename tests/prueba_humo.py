@@ -157,7 +157,26 @@ def main() -> int:
               "escribe un botón en la memoria del ratón")
     comprobar(releido.niveles[1].x == 1500, "y un nivel de DPI")
 
-    print("7. Robustez")
+    print("7. El modo lo elige el usuario, no el demonio")
+    from gpx2.profiles import guardar_modo_preferido, leer_modo_preferido
+    with tempfile.TemporaryDirectory() as tmp:
+        ruta = Path(tmp) / "modo"
+        ruta.write_text("onboard\n")
+        comprobar(ruta.read_text().strip() == "onboard", "la elección se guarda")
+    # El demonio no puede distinguir "el ratón se ha reiniciado" de "lo has
+    # pedido tú": sin la preferencia, deshacía la elección cada cinco segundos.
+    from gpx2.daemon import Demonio
+    for preferido, esperado in (("onboard", False), ("host", True)):
+        d = Demonio(demo=True)
+        d.buscar_raton()
+        d.recargar()
+        guardar_modo_preferido(preferido, True)
+        d.raton.onboard.set_host(False)
+        d._reponer_si_ha_derivado()
+        comprobar(d.raton.onboard.es_host() == esperado,
+                  f"si eliges {preferido}, el ratón se queda ahí")
+
+    print("8. Robustez")
     from gpx2.features import Firmware
     fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)
     # Sin el espacio se lee "BL171.00", como si la versión fuera la 171.
@@ -166,7 +185,7 @@ def main() -> int:
     from gpx2.transport import enumerate_nodes
     comprobar(isinstance(enumerate_nodes(), list), "la enumeración no lanza")
 
-    print("8. Botones reprogramables (0x1B04)")
+    print("9. Botones reprogramables (0x1B04)")
     botones = raton.buttons
     comprobar(botones is not None, "el ratón declara la feature de botones")
     controles = botones.controls()

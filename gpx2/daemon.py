@@ -159,11 +159,6 @@ class Demonio:
         nada raro, pero al despertarse ha vuelto a los ajustes de su perfil
         interno. Sin esto, el DPI se pierde en silencio.
         """
-        activo = self.motor.perfil_activo
-        perfil = self.almacen.obtener(activo) if activo else None
-        if perfil is None:
-            return
-
         # Si has elegido modo onboard, mandas tú: el ratón está así porque lo
         # has pedido, no porque se haya reiniciado. Sin esta comprobación el
         # demonio te devolvía a host cada cinco segundos.
@@ -172,10 +167,24 @@ class Demonio:
 
         # Encontrar el ratón en onboard cuando has pedido host significa que se
         # ha reiniciado por su cuenta: el modo ES la deriva, aunque los valores
-        # coincidan por casualidad, así que se repone sin más comprobaciones.
+        # coincidan por casualidad. Y esto no puede depender de que haya un
+        # perfil activo: si el ratón arrancó en onboard, nunca llegó a
+        # aplicarse ninguno y el modo no se recuperaría jamás.
         onboard = self.raton.onboard
         if onboard is not None and not onboard.es_host():
-            self.aplicar(perfil, "el ratón había vuelto a sus ajustes")
+            activo = self.motor.perfil_activo
+            perfil = (self.almacen.obtener(activo) if activo
+                      else self.almacen.por_defecto())
+            if perfil is not None:
+                self.aplicar(perfil, "el ratón había vuelto a sus ajustes")
+            else:
+                self.raton.asegurar_host()
+                log.info("el ratón había vuelto a modo onboard; devuelto a host")
+            return
+
+        activo = self.motor.perfil_activo
+        perfil = self.almacen.obtener(activo) if activo else None
+        if perfil is None:
             return
 
         # En modo host no se toca nada: una diferencia con el perfil la ha

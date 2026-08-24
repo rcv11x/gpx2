@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QIcon
@@ -28,6 +30,36 @@ from .widgets import (ColumnaCentrada, DelegadoDispositivo,
                       pastilla)
 
 ROL_DATOS = Qt.ItemDataRole.UserRole
+
+
+@contextmanager
+def _ocupado(widget: QWidget, texto: str):
+    """Cursor de espera y mensaje mientras algo tarda.
+
+    Escanear el bus o escribir en la memoria del ratón bloquea la interfaz
+    medio segundo largo. Sin señal alguna parece que se ha colgado, y la gente
+    vuelve a pulsar.
+    """
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    _avisar(widget, texto, 0)
+    QApplication.processEvents()
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
+def _avisar(widget: QWidget, texto: str, ms: int = 5000) -> None:
+    """Mensaje en la barra de estado, si la hay.
+
+    Las páginas también se usan sueltas (snapshot.py las renderiza fuera de la
+    ventana principal), y ahí no existe barra de estado: un aviso no puede ser
+    motivo de que reviente nada.
+    """
+    ventana = widget.window()
+    barra = getattr(ventana, "statusBar", None)
+    if callable(barra):
+        barra().showMessage(texto, ms)
 
 
 def _envolver(widget: QWidget) -> QScrollArea:
@@ -133,8 +165,7 @@ class PaginaRaton(QWidget):
         lay.addWidget(self._cabecera())
 
         pestañas = QTabWidget()
-        pestañas.addTab(_envolver(self._tab_sensibilidad()), "Sensibilidad")
-        pestañas.addTab(_envolver(self._tab_rendimiento()), "Rendimiento")
+        pestañas.addTab(_envolver(self._tab_sensibilidad()), "Ajustes")
         pestañas.addTab(_envolver(self._tab_botones()), "Botones")
         if self.raton.onboard is not None:
             pestañas.addTab(_envolver(self._tab_memoria()), "Memoria del ratón")
@@ -163,12 +194,53 @@ class PaginaRaton(QWidget):
         lay.addLayout(textos)
         lay.addStretch(1)
 
+        # Con el cambio automático por juego, saber qué perfil manda es lo
+        # primero que uno quiere ver, y estaba escondido en otra pestaña.
+        self.pastilla_perfil = pastilla("")
+        self.pastilla_perfil.setVisible(False)
+        lay.addWidget(self.pastilla_perfil)
+
         bat = self.estado.get("battery")
         self.pastilla_bateria = None
         if bat and bat.percent is not None:
             self.pastilla_bateria = pastilla(self._texto_bateria(bat))
             lay.addWidget(self.pastilla_bateria)
+        self._refrescar_perfil_activo()
         return caja
+
+    def _perfil_activo(self):
+        """El perfil que manda ahora: lo dice el demonio, o el que hay marcado
+        por defecto si no está en marcha."""
+        try:
+            almacen = Almacen(demo=self.demo)
+            almacen.cargar()
+        except Exception:
+            return None
+        try:
+            cliente = ClienteDemonio()
+            if cliente.activo:
+                pid = cliente.estado().get("perfil_activo", "")
+                # El demonio puede nombrar un perfil que este almacén no tiene
+                # (le pasa al modo demo, que usa otra carpeta). Entonces vale
+                # más el predeterminado que no enseñar nada.
+                if pid and almacen.obtener(pid) is not None:
+                    return almacen.obtener(pid)
+        except Exception:
+            pass
+        return almacen.por_defecto()
+
+    def _refrescar_perfil_activo(self) -> None:
+        pastilla_ = getattr(self, "pastilla_perfil", None)
+        if pastilla_ is None:
+            return
+        perfil = self._perfil_activo()
+        if perfil is None:
+            pastilla_.setVisible(False)
+            return
+        pastilla_.setText(f"⬢ {perfil.nombre}")
+        pastilla_.setToolTip(
+            "Perfil que manda ahora mismo. Se cambia en la pestaña Perfiles.")
+        pastilla_.setVisible(True)
 
     @staticmethod
     def _texto_bateria(bat) -> str:
@@ -205,6 +277,15 @@ class PaginaRaton(QWidget):
                 "DPI del sensor",
                 "Este ratón no permite ajustar el DPI desde el sistema."))
 
+        # La tasa de reporte es lo mismo que el DPI: cómo se comporta el ratón
+        # ahora. Tenerlas en pestañas distintas obligaba a saltar entre dos
+        # pantallas para lo mismo.
+        tarjetas.append(self._tarjeta_tasa())
+        if self.raton.onboard is None:
+            tarjetas.append(Tarjeta(
+                "Modo de funcionamiento",
+                self.estado.get("mode")
+                or "Este ratón no informa de en qué modo está."))
         tarjetas.append(self._tarjeta_kde())
         return _columna(*tarjetas)
 
@@ -265,6 +346,18 @@ class PaginaRaton(QWidget):
                      f"de fábrica {dpi.por_defecto} DPI")
         pie.setObjectName("Suave")
         t.añadir(pie)
+
+        # Lo que se toca aquí cambia el ratón al momento, pero NO el perfil.
+        # Sin decirlo, uno mueve el deslizador, luego se aplica un perfil y no
+        # entiende por qué se ha perdido su ajuste.
+        self.lbl_desfase = QLabel()
+        self.lbl_desfase.setObjectName("Suave")
+        self.lbl_desfase.setWordWrap(True)
+        t.añadir(self.lbl_desfase)
+        self.btn_guardar_perfil = QPushButton()
+        self.btn_guardar_perfil.clicked.connect(self._guardar_en_perfil)
+        t.añadir(self.btn_guardar_perfil)
+        self._refrescar_desfase()
         self._marcar_nivel(dpi.actual)
         return t
 
@@ -292,6 +385,8 @@ class PaginaRaton(QWidget):
                 self._marcar_nivel(dpi.actual)
 
         self._resincronizar_rate()
+        self._refrescar_perfil_activo()
+        self._refrescar_desfase()
 
         if self.raton.onboard is not None and hasattr(self, "lbl_modo"):
             try:
@@ -330,7 +425,7 @@ class PaginaRaton(QWidget):
         t.añadir(chk)
         return t
 
-    def _tab_rendimiento(self) -> QWidget:
+    def _tarjeta_tasa(self) -> Tarjeta:
         rate = self.estado.get("rate")
         if rate:
             cap = self.raton.rate
@@ -359,14 +454,7 @@ class PaginaRaton(QWidget):
             t = Tarjeta("Tasa de reporte",
                         "Este ratón no permite ajustar la tasa de reporte.")
 
-        if self.raton.onboard is None:
-            t2 = Tarjeta("Modo de funcionamiento",
-                         self.estado.get("mode")
-                         or "Este ratón no informa de en qué modo está.")
-            return _columna(t, t2)
-        # Con memoria de perfiles, el modo vive en su propia pestaña: es lo que
-        # decide si el ratón usa esa memoria o le hacemos caso a nosotros.
-        return _columna(t)
+        return t
 
     def _pintar_boton_modo(self, btn: QPushButton) -> None:
         try:
@@ -540,6 +628,50 @@ class PaginaRaton(QWidget):
 
         return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
 
+    def _refrescar_desfase(self) -> None:
+        """Avisa si lo que tiene el ratón ya no es lo que dice el perfil."""
+        etiqueta = getattr(self, "lbl_desfase", None)
+        boton = getattr(self, "btn_guardar_perfil", None)
+        if etiqueta is None or boton is None:
+            return
+        perfil = self._perfil_activo()
+        dpi = self.estado.get("dpi")
+        if perfil is None or dpi is None:
+            etiqueta.setVisible(False)
+            boton.setVisible(False)
+            return
+
+        guardado = perfil.ajustes.dpi
+        if guardado is None or guardado == dpi.actual:
+            etiqueta.setText(f"Coincide con el perfil «{perfil.nombre}».")
+            boton.setVisible(False)
+        else:
+            etiqueta.setText(
+                f"El perfil «{perfil.nombre}» tiene {guardado} DPI guardados. "
+                "Esto que has puesto vale hasta que se aplique un perfil.")
+            boton.setText(f"Guardar {dpi.actual} DPI en «{perfil.nombre}»")
+            boton.setVisible(True)
+        etiqueta.setVisible(True)
+
+    def _guardar_en_perfil(self) -> None:
+        perfil = self._perfil_activo()
+        dpi = self.estado.get("dpi")
+        if perfil is None or dpi is None:
+            return
+        perfil.ajustes.dpi = dpi.actual
+        rate = self.estado.get("rate")
+        if rate and perfil.ajustes.report_rate_hz is not None:
+            perfil.ajustes.report_rate_hz = rate.actual_hz
+        try:
+            almacen = Almacen(demo=self.demo)
+            almacen.cargar()
+            almacen.guardar(perfil)
+        except Exception as e:
+            QMessageBox.warning(self, "No se pudo guardar el perfil", str(e))
+            return
+        self._refrescar_desfase()
+        _avisar(self, f"«{perfil.nombre}» guardado con {dpi.actual} DPI")
+
     def _pintar_aviso_modo(self) -> None:
         aviso = getattr(self, "lbl_modo_aviso", None)
         if aviso is None:
@@ -579,10 +711,13 @@ class PaginaRaton(QWidget):
         from .. import onboard as ob_mod
         try:
             copia = self._copia_sector()
-            self.raton.onboard.escribir_sector(1, ob_mod.escribir_perfil(perfil))
+            with _ocupado(self, f"Guardando {que} en el ratón…"):
+                self.raton.onboard.escribir_sector(
+                    1, ob_mod.escribir_perfil(perfil))
             self._sector_ob = self.raton.onboard.leer_sector(1)
             self._perfil_ob = ob_mod.leer_perfil(self._sector_ob,
                                                  self.raton.onboard.num_botones)
+            _avisar(self, f"{que.capitalize()} guardados en el ratón")
         except Exception as e:
             QMessageBox.warning(self, f"No se pudo guardar {que}", str(e))
             return False
@@ -1206,9 +1341,8 @@ class PanelPerfiles(QWidget):
         pagina = self._pagina_raton()
         if pagina is not None:
             pagina.refrescar_ajustes()
-        self.window().statusBar().showMessage(
-            f"{perfil.nombre}: " + ("; ".join(cambios) if cambios else "ya estaba aplicado"),
-            6000)
+        _avisar(self, f"{perfil.nombre}: "
+                + ("; ".join(cambios) if cambios else "ya estaba aplicado"), 6000)
 
     def _crear(self) -> None:
         nombre, ok = QInputDialog.getText(
@@ -1407,7 +1541,8 @@ class VentanaPrincipal(QMainWindow):
             return
         self._escaneando = True
         try:
-            self._escanear()
+            with _ocupado(self, "Buscando dispositivos…"):
+                self._escanear()
         finally:
             self._escaneando = False
 

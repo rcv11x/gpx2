@@ -124,7 +124,16 @@ def main() -> int:
         comprobar("report_rate_hz" in motor.imposibles, "y lo recuerda")
         comprobar(motor.aplicar(otro) == [], "no lo reintenta sin parar")
 
-    print("6. Botones reprogramables (0x1B04)")
+    print("6. Robustez")
+    from gpx2.features import Firmware
+    fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)
+    # Sin el espacio se lee "BL171.00", como si la versión fuera la 171.
+    comprobar(fw.version == "BL1 71.00.B0012", "compone la versión de firmware")
+    # Un nodo con el uevent en formato inesperado no puede tumbar la lista.
+    from gpx2.transport import enumerate_nodes
+    comprobar(isinstance(enumerate_nodes(), list), "la enumeración no lanza")
+
+    print("7. Botones reprogramables (0x1B04)")
     botones = raton.buttons
     comprobar(botones is not None, "el ratón declara la feature de botones")
     controles = botones.controls()

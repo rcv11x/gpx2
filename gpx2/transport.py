@@ -80,8 +80,13 @@ class HidrawNode:
 def enumerate_nodes() -> list[HidrawNode]:
     """Lista todos los /dev/hidraw* leyendo sólo /sys (no abre ningún fichero)."""
     nodes: list[HidrawNode] = []
-    for sysdir in sorted(glob("/sys/class/hidraw/hidraw*"),
-                         key=lambda p: int(p.rsplit("hidraw", 1)[1])):
+    def _numero(ruta: str) -> int:
+        try:
+            return int(ruta.rsplit("hidraw", 1)[1])
+        except ValueError:
+            return 1 << 30          # los raros, al final; sin reventar
+
+    for sysdir in sorted(glob("/sys/class/hidraw/hidraw*"), key=_numero):
         node = HidrawNode(path=f"/dev/{os.path.basename(sysdir)}")
         try:
             with open(f"{sysdir}/device/uevent") as fh:
@@ -105,7 +110,11 @@ def enumerate_nodes() -> list[HidrawNode]:
                     node.usage_page = page
                     node.report_ids = sorted(rids)
                     break
-        except OSError:
+        except (OSError, ValueError, IndexError):
+            # Un nodo ilegible o con el uevent en un formato inesperado no
+            # puede llevarse por delante la lista entera: se anota lo que se
+            # haya podido leer y se sigue. Además desaparecen a media lectura
+            # cuando alguien desenchufa algo, que es justo cuando escaneamos.
             pass
         nodes.append(node)
     return nodes

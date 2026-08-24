@@ -1118,8 +1118,19 @@ class VentanaPrincipal(QMainWindow):
             for r in self.hallazgo.ratones:
                 r.close()
 
-        self.hallazgo = discover()
-        punteros = desktop.listar_punteros()
+        # Escaneamos cada vez que cambia un nodo, o sea justo cuando alguien
+        # está enchufando o desenchufando algo: los nodos desaparecen a media
+        # lectura. Un fallo aquí no puede llevarse la ventana por delante.
+        error = None
+        try:
+            self.hallazgo = discover()
+        except Exception as e:
+            self.hallazgo = Discovery()
+            error = str(e)
+        try:
+            punteros = desktop.listar_punteros()
+        except Exception:
+            punteros = []
 
         if self.demo:
             # Ratón inventado, para trabajar en la interfaz sin hardware.
@@ -1175,7 +1186,7 @@ class VentanaPrincipal(QMainWindow):
                 self.pila.addWidget(pagina)
                 self._entrada(info.nombre, info.id_str, pagina)
 
-        self._actualizar_vacio()
+        self._actualizar_vacio(error)
         if self.lista.count():
             # Volver al mismo dispositivo que estaba seleccionado; si ya no
             # está (lo han desconectado), al primero que sirva.
@@ -1249,14 +1260,21 @@ class VentanaPrincipal(QMainWindow):
         if pagina is not None:
             self.pila.setCurrentWidget(pagina)
 
-    def _actualizar_vacio(self) -> None:
+    def _actualizar_vacio(self, error: str | None = None) -> None:
         h = self.hallazgo
+        if error:
+            self.vacia.poner_detalle(
+                f"El escaneo falló: {error}\n\n"
+                "Si acabas de conectar o desconectar algo, vuelve a intentarlo.")
+            return
         if h and h.sin_permiso:
             rutas = ", ".join(n.path for n in h.sin_permiso)
             self.vacia.poner_detalle(
                 f"Se han encontrado dispositivos Logitech con canal HID++ ({rutas}) "
                 "pero no hay permiso para abrirlos.\n\n"
-                "Instala la regla udev incluida en el proyecto:\n"
+                "Hace falta la regla udev. Si instalaste gpx2 con un paquete, ya "
+                "viene incluida y basta con reconectar el dispositivo. Si lo "
+                "tienes desde el repositorio:\n\n"
                 "sudo cp 99-logitech-hidpp.rules /etc/udev/rules.d/ && "
                 "sudo udevadm control --reload-rules && sudo udevadm trigger")
         elif h and not h.ratones:

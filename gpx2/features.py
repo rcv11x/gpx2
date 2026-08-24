@@ -596,7 +596,8 @@ class Firmware:
     @property
     def version(self) -> str:
         # Formato de Logitech: PREFIJO NN.MM.BXXXX, con los números en BCD.
-        return f"{self.prefijo}{self.numero:02X}.{self.revision:02X}.B{self.build:04X}"
+        return (f"{self.prefijo} {self.numero:02X}.{self.revision:02X}"
+                f".B{self.build:04X}")
 
 
 class DeviceInfo(Capability):

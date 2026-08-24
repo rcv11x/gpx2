@@ -469,7 +469,7 @@ def bloque_escuchar(segundos: float) -> None:
     escuchar_botones(elegido[0], segundos)
 
 
-def mapa_de_botones(dispositivos: list[str], espera: float = 6.0) -> None:
+def mapa_de_botones(dispositivos: list[str], espera: float = 25.0) -> None:
     """Pregunta por cada botón y anota qué llega. Sin ambigüedades.
 
     Escuchar y contar deja siempre la duda de qué botón se pulsó de verdad.
@@ -495,11 +495,29 @@ def mapa_de_botones(dispositivos: list[str], espera: float = 6.0) -> None:
         ("LATERAL TRASERO (atrás)", 0x113),
         ("LATERAL DELANTERO (adelante)", 0x114),
     ]
+    def vaciar() -> None:
+        for fd in fds:
+            try:
+                while os.read(fd, TAM_EVENTO * 256):
+                    pass
+            except (BlockingIOError, OSError):
+                pass
+
+    print("\n  Se te pedirá un botón cada vez. Entre uno y otro hay una pausa\n"
+          "  para descartar clics sueltos: no pulses nada hasta que lo pida.\n"
+          "  Si el clic central te pega texto en la terminal, da igual: la\n"
+          "  medición no se entera.")
+
     resultados = []
     try:
         for etiqueta, esperado in pedidos:
-            print(f"\n  ► Pulsa el {etiqueta}  (tienes {espera:.0f} s, "
-                  "o espera para saltarlo)")
+            # Un par de segundos en blanco: si acabas de pulsar algo para
+            # recuperar el foco de la terminal, ese clic no cuenta.
+            print(f"\n  ── prepárate para el {etiqueta} ──")
+            time.sleep(2.0)
+            vaciar()
+            print(f"  ► Pulsa AHORA el {etiqueta}"
+                  f"  (hasta {espera:.0f} s; si no, se salta)")
             recibido, nodo = None, None
             fin = time.monotonic() + espera
             while time.monotonic() < fin and recibido is None:
@@ -522,14 +540,6 @@ def mapa_de_botones(dispositivos: list[str], espera: float = 6.0) -> None:
                 marca = "OK" if recibido == esperado else "← NO COINCIDE"
                 print(f"     llegó: {nombre}   por {nodo}   {marca}")
             resultados.append((etiqueta, esperado, recibido))
-            # Vaciar lo que haya quedado antes de pedir el siguiente.
-            time.sleep(0.4)
-            for fd in fds:
-                try:
-                    while os.read(fd, TAM_EVENTO * 64):
-                        pass
-                except (BlockingIOError, OSError):
-                    pass
     finally:
         for fd in fds:
             os.close(fd)
@@ -1322,7 +1332,7 @@ def main() -> int:
                     help="devuelve un sector a como estaba desde una copia")
     ap.add_argument("--copia", default="/tmp/gpx2-sector.bin",
                     help="dónde guardar la copia de seguridad del sector")
-    ap.add_argument("--mapa-botones", nargs="?", const=6.0, type=float,
+    ap.add_argument("--mapa-botones", nargs="?", const=25.0, type=float,
                     metavar="SEGUNDOS",
                     help="te pide cada botón y anota qué código llega")
     ap.add_argument("--botones-en-vivo", nargs="?", const=20.0, type=float,

@@ -82,6 +82,21 @@ def hoja_de_estilo(pal: QPalette) -> str:
     QTabWidget::tab-bar {{ left: 18px; }}
     QTabBar::tab {{ padding: 7px 16px; margin-right: 4px; border-radius: 7px; }}
     QTabBar::tab:selected {{ background: {mezclar(ventana, realce, 0.30).name()}; }}
+    /* Perfiles: la selección se marca en suave, porque el color de realce
+       está reservado al perfil que manda. Marcar los dos igual hacía que se
+       leyeran como lo mismo. */
+    QListWidget#ListaPerfiles {{ background: transparent; border: none; }}
+    QListWidget#ListaPerfiles::item {{
+        padding: 7px 10px; border-radius: 7px; margin: 1px 2px;
+    }}
+    QListWidget#ListaPerfiles::item:selected {{
+        background: {mezclar(tarjeta_col, texto, 0.14).name()};
+        color: {texto.name()};
+    }}
+    QListWidget#ListaPerfiles::item:hover {{
+        background: {mezclar(tarjeta_col, texto, 0.07).name()};
+    }}
+
     /* Atajos de DPI. Hay que dar geometría también al estado normal: en
        cuanto se estila :checked, ese botón pasa a dibujarse por QSS y los
        demás siguen con el estilo nativo, y quedan de distinto tamaño. */

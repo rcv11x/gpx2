@@ -217,7 +217,9 @@ class PaginaRaton(QWidget):
         self.pastilla_perfil = pastilla("")
         self.pastilla_perfil.setObjectName("PastillaPerfil")
         self.pastilla_perfil.setVisible(False)
-        lay.addWidget(self.pastilla_perfil)
+        # Sin alinear, el layout le da toda la altura de la cabecera y la
+        # pastilla queda como un bloque en vez de ceñirse al texto.
+        lay.addWidget(self.pastilla_perfil, 0, Qt.AlignmentFlag.AlignVCenter)
         lay.addSpacing(14)
 
         bat = self.estado.get("battery")
@@ -226,7 +228,7 @@ class PaginaRaton(QWidget):
         self.pastilla_bateria.setVisible(bool(bat and bat.percent is not None))
         if bat and bat.percent is not None:
             self.pastilla_bateria.setText(self._texto_bateria(bat))
-        lay.addWidget(self.pastilla_bateria)
+        lay.addWidget(self.pastilla_bateria, 0, Qt.AlignmentFlag.AlignVCenter)
         self._refrescar_perfil_activo()
         return caja
 
@@ -1238,7 +1240,10 @@ class PanelPerfiles(QWidget):
                           "Cada perfil es un fichero TOML en "
                           f"{self.almacen.dir}, editable a mano.")
         self.lista = QListWidget()
-        self.lista.setObjectName("ListaDispositivos")
+        # Nombre propio: el estilo de la lista lateral pinta la selección con
+        # el color de realce a todo lo ancho, y aquí ese color tiene que ser
+        # para el perfil que MANDA, no para el que está seleccionado.
+        self.lista.setObjectName("ListaPerfiles")
         self.lista.setItemDelegate(DelegadoDispositivo(self.lista))
         self.lista.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1433,15 +1438,11 @@ class VentanaPrincipal(QMainWindow):
         lateral.setObjectName("Lateral")
         # Sin esto el divisor deja arrastrar la barra hasta que desaparece y
         # no hay forma de recuperarla.
-        lateral.setMinimumWidth(210)
+        lateral.setMinimumWidth(190)
         lateral.setMaximumWidth(420)
         lat = QVBoxLayout(lateral)
         lat.setContentsMargins(0, 14, 0, 10)
         lat.setSpacing(8)
-
-        cab = QLabel("  Dispositivos")
-        cab.setObjectName("TituloTarjeta")
-        lat.addWidget(cab)
 
         self.lista = QListWidget()
         self.lista.setObjectName("ListaDispositivos")
@@ -1449,12 +1450,18 @@ class VentanaPrincipal(QMainWindow):
         self.lista.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.lista.setUniformItemSizes(False)
+        self.lista.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                 QSizePolicy.Policy.Maximum)
+        self.lista.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.lista.currentItemChanged.connect(self._seleccion)
-        lat.addWidget(self.lista, 1)
+        lat.addWidget(self.lista)
 
         self.btn_rescan = QPushButton("Volver a escanear")
+        self.btn_rescan.setFlat(True)
         self.btn_rescan.clicked.connect(self.escanear)
         lat.addWidget(self.btn_rescan)
+        lat.addStretch(1)
 
         self.pila = QStackedWidget()
         self.vacia = PaginaVacia(self.escanear)
@@ -1463,7 +1470,7 @@ class VentanaPrincipal(QMainWindow):
         divisor.addWidget(lateral)
         divisor.addWidget(self.pila)
         divisor.setStretchFactor(1, 1)
-        divisor.setSizes([270, 770])
+        divisor.setSizes([230, 990])
         divisor.setChildrenCollapsible(False)
         self.lateral = lateral
         self.setCentralWidget(divisor)
@@ -1674,6 +1681,7 @@ class VentanaPrincipal(QMainWindow):
                     break
             if fila is not None:
                 self.lista.setCurrentRow(fila)
+        self._ajustar_alto_lista()
         self._reaplicar_por_defecto(ids_antes)
         self.statusBar().showMessage(
             f"{len(self.hallazgo.ratones)} ratón(es) HID++ · "
@@ -1711,6 +1719,16 @@ class VentanaPrincipal(QMainWindow):
                     QApplication.processEvents()
             except Exception:
                 continue
+
+    def _ajustar_alto_lista(self) -> None:
+        """La lista ocupa lo que ocupan sus entradas, no todo el panel.
+
+        Con dos dispositivos, una lista a pantalla completa deja un vacío
+        enorme debajo y el panel parece roto.
+        """
+        alto = sum(self.lista.sizeHintForRow(i)
+                   for i in range(self.lista.count())) + 8
+        self.lista.setFixedHeight(min(alto, 460))
 
     def _encabezado(self, texto: str) -> None:
         item = QListWidgetItem(texto)

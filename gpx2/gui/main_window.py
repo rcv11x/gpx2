@@ -39,14 +39,27 @@ def _envolver(widget: QWidget) -> QScrollArea:
     return area
 
 
+# Una línea de texto de 2000 píxeles no se lee: el ojo pierde el renglón al
+# volver. En una pantalla ancha las tarjetas se quedan a este ancho y el resto
+# es margen.
+ANCHO_MAXIMO = 1100
+
+
 def _columna(*widgets, espaciado: int = 14, margen: int = 18) -> QWidget:
-    caja = QWidget()
-    lay = QVBoxLayout(caja)
-    lay.setContentsMargins(margen, margen, margen, margen)
+    contenido = QWidget()
+    lay = QVBoxLayout(contenido)
+    lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(espaciado)
     for w in widgets:
         lay.addWidget(w)
     lay.addStretch(1)
+    contenido.setMaximumWidth(ANCHO_MAXIMO)
+
+    caja = QWidget()
+    fuera = QHBoxLayout(caja)
+    fuera.setContentsMargins(margen, margen, margen, margen)
+    fuera.addWidget(contenido, 1)
+    fuera.addStretch(0)
     return caja
 
 

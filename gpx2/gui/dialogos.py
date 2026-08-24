@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem,
                                QPushButton, QVBoxLayout, QWidget)
 
-from ..procesos import juegos_instalados, listar_candidatos
+from ..procesos import (juegos_instalados, listar_candidatos,
+                        nombres_de_steam)
 
 ROL_VALOR = Qt.ItemDataRole.UserRole
 
@@ -48,10 +49,12 @@ class DialogoJuegos(QDialog):
         raiz.addWidget(QLabel("Activan este perfil:"))
         self.lista_activadores = QListWidget()
         self.lista_activadores.setMaximumHeight(150)
+        # El AppID a secas no le dice nada a nadie: se enseña el nombre.
+        self._nombres_steam = nombres_de_steam()
         for e in ejecutables:
             self._añadir_activador(e, ("exe", e))
         for a in appids:
-            self._añadir_activador(f"Steam {a}", ("steam", a))
+            self._añadir_activador(self._nombre_steam(a), ("steam", a))
         raiz.addWidget(self.lista_activadores)
 
         quitar = QPushButton("Quitar el seleccionado")
@@ -104,6 +107,10 @@ class DialogoJuegos(QDialog):
         self._cargar()
 
     # -- activadores ----------------------------------------------------------
+
+    def _nombre_steam(self, appid: int) -> str:
+        nombre = self._nombres_steam.get(appid)
+        return f"{nombre}  ·  Steam {appid}" if nombre else f"Steam {appid}"
 
     def _añadir_activador(self, texto: str, valor) -> bool:
         for i in range(self.lista_activadores.count()):
@@ -166,8 +173,8 @@ class DialogoJuegos(QDialog):
         if item is None or item.data(ROL_VALOR) is None:
             return
         tipo, valor = item.data(ROL_VALOR)
-        self._añadir_activador(f"Steam {valor}" if tipo == "steam" else valor,
-                               (tipo, valor))
+        self._añadir_activador(self._nombre_steam(valor) if tipo == "steam"
+                               else valor, (tipo, valor))
 
     def _añadir_manual(self) -> None:
         texto = self.manual.text().strip()
@@ -175,7 +182,7 @@ class DialogoJuegos(QDialog):
             return
         if texto.lower().startswith("steam:") and texto[6:].strip().isdigit():
             appid = int(texto[6:].strip())
-            self._añadir_activador(f"Steam {appid}", ("steam", appid))
+            self._añadir_activador(self._nombre_steam(appid), ("steam", appid))
         else:
             self._añadir_activador(texto, ("exe", texto))
         self.manual.clear()

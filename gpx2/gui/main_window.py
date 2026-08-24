@@ -706,20 +706,30 @@ class PaginaRaton(QWidget):
             return
         perfil = self._perfil_activo()
         dpi = self.estado.get("dpi")
-        if perfil is None or dpi is None:
+        rate = self.estado.get("rate")
+        if perfil is None or (dpi is None and rate is None):
             etiqueta.setVisible(False)
             boton.setVisible(False)
             return
 
-        guardado = perfil.ajustes.dpi
-        if guardado is None or guardado == dpi.actual:
+        # Se comparan los dos ajustes, no sólo el DPI: cambiar la tasa y que no
+        # apareciera el botón dejaba sin forma de guardarla en el perfil.
+        difieren = []
+        if dpi is not None and perfil.ajustes.dpi not in (None, dpi.actual):
+            difieren.append(f"{perfil.ajustes.dpi} DPI")
+        if rate is not None and perfil.ajustes.report_rate_hz not in (
+                None, rate.actual_hz):
+            difieren.append(f"{perfil.ajustes.report_rate_hz} Hz")
+
+        if not difieren:
             etiqueta.setText(f"Coincide con el perfil «{perfil.nombre}».")
             boton.setVisible(False)
         else:
             etiqueta.setText(
-                f"El perfil «{perfil.nombre}» tiene {guardado} DPI guardados. "
-                "Esto que has puesto vale hasta que se aplique un perfil.")
-            boton.setText(f"Guardar {dpi.actual} DPI en «{perfil.nombre}»")
+                f"El perfil «{perfil.nombre}» tiene guardado "
+                f"{' y '.join(difieren)}. Esto que has puesto vale hasta que se "
+                "aplique un perfil.")
+            boton.setText(f"Guardar esto en «{perfil.nombre}»")
             boton.setVisible(True)
         etiqueta.setVisible(True)
 
@@ -728,7 +738,11 @@ class PaginaRaton(QWidget):
         dpi = self.estado.get("dpi")
         if perfil is None or dpi is None:
             return
-        perfil.ajustes.dpi = dpi.actual
+        # Se guardan los dos ajustes que el perfil ya llevaba. No se le añaden
+        # campos nuevos: si un perfil sólo toca el DPI a propósito, meterle la
+        # tasa cambiaría lo que hace sin que nadie lo haya pedido.
+        if perfil.ajustes.dpi is not None:
+            perfil.ajustes.dpi = dpi.actual
         rate = self.estado.get("rate")
         if rate and perfil.ajustes.report_rate_hz is not None:
             perfil.ajustes.report_rate_hz = rate.actual_hz
@@ -740,7 +754,7 @@ class PaginaRaton(QWidget):
             QMessageBox.warning(self, "No se pudo guardar el perfil", str(e))
             return
         self._refrescar_desfase()
-        _avisar(self, f"«{perfil.nombre}» guardado con {dpi.actual} DPI")
+        _avisar(self, f"«{perfil.nombre}» guardado")
 
     def _pintar_aviso_modo(self) -> None:
         aviso = getattr(self, "lbl_modo_aviso", None)
@@ -1130,6 +1144,7 @@ class PaginaRaton(QWidget):
                                 self._explicar(e))
 
     def _set_rate(self, hz: int) -> None:
+        self._tras_cambiar_rate = True
         from gpx2.features import EscrituraIgnorada
         try:
             self._antes_de_escribir()
@@ -1146,6 +1161,7 @@ class PaginaRaton(QWidget):
             QMessageBox.warning(self, "No se pudo cambiar la tasa de reporte",
                                 self._explicar(e))
             self._resincronizar_rate()
+        self._refrescar_desfase()
 
     def _resincronizar_rate(self) -> None:
         """Devuelve el desplegable a lo que el ratón dice de verdad."""

@@ -283,7 +283,40 @@ def main() -> int:
         comprobar(d.raton.onboard.es_host() == esperado,
                   f"si eliges {preferido}, el ratón se queda ahí")
 
-    print("9. Robustez")
+    print("9. El ratón ocupado no es un ratón desconectado")
+    # El nodo hidraw es de uno a la vez. Cuando lo tiene la interfaz, el ping
+    # del demonio falla — y darlo por desconectado hacía que al "recuperarlo"
+    # reaplicara el perfil. Con la ventana abierta pasaba decenas de veces por
+    # hora, y se veía como que el DPI se cambiaba solo.
+    import asyncio as _asyncio
+    from gpx2.transport import DispositivoOcupado
+
+    d = Demonio(demo=True)
+    d.buscar_raton()
+    d.recargar()
+    comprobar(d.raton is not None, "el demonio encuentra el ratón simulado")
+
+    def _ocupado(*a, **k):
+        raise DispositivoOcupado("lo tiene la interfaz")
+
+    real = d.raton.hpp.ping
+    d.raton.hpp.ping = _ocupado
+    for _ in range(5):
+        _asyncio.run(d.revisar_conexion())
+    comprobar(d.raton is not None,
+              "cinco pings ocupados seguidos no lo dan por desconectado")
+
+    def _falla(*a, **k):
+        raise OSError("sin respuesta")
+
+    d.raton.hpp.ping = _falla
+    _asyncio.run(d.revisar_conexion())
+    comprobar(d.raton is not None, "un fallo suelto tampoco: puede ser la radio")
+    _asyncio.run(d.revisar_conexion())
+    _asyncio.run(d.revisar_conexion())
+    comprobar(d.raton is None, "pero tres seguidos sí que es una desconexión")
+
+    print("10. Robustez")
     from gpx2.features import Firmware
     fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)
     # Sin el espacio se lee "BL171.00", como si la versión fuera la 171.
@@ -292,7 +325,7 @@ def main() -> int:
     from gpx2.transport import enumerate_nodes
     comprobar(isinstance(enumerate_nodes(), list), "la enumeración no lanza")
 
-    print("10. Botones reprogramables (0x1B04)")
+    print("11. Botones reprogramables (0x1B04)")
     botones = raton.buttons
     comprobar(botones is not None, "el ratón declara la feature de botones")
     controles = botones.controls()

@@ -823,6 +823,7 @@ class PaginaRaton(QWidget):
                                                  self.raton.onboard.num_botones,
                                                  self.raton.onboard.formato)
             _avisar(self, f"{que.capitalize()} guardados en el ratón")
+            self._refrescar_boton_guardar()
         except Exception as e:
             QMessageBox.warning(self, f"No se pudo guardar {que}", str(e))
             return False
@@ -856,6 +857,34 @@ class PaginaRaton(QWidget):
             perfil.niveles[i].x = perfil.niveles[i].y = v
         perfil.nivel_por_defecto = self._combo_defecto.currentIndex()
         self._escribir_perfil_ob(perfil, "los niveles")
+
+    def _refrescar_boton_guardar(self) -> None:
+        """Enciende el botón de guardar sólo si hay algo distinto que guardar.
+
+        Cambiar un desplegable no escribe en el ratón —hay que pulsar guardar—,
+        pero el esquema sí se actualiza al momento, y eso hace pensar que ya
+        está hecho. Con el botón apagado hasta que hay cambios, y encendido en
+        cuanto los hay, se ve de un vistazo lo que falta.
+        """
+        from .. import onboard as ob_mod
+        btn = getattr(self, "_btn_botones", None)
+        perfil = getattr(self, "_perfil_ob", None)
+        if btn is None or perfil is None:
+            return
+        cambiados = 0
+        for i, combo in enumerate(self._combos_boton):
+            nombre = combo.currentData()
+            if nombre is None or i >= len(perfil.botones):
+                continue
+            if ob_mod.ACCIONES[nombre] != perfil.botones[i]:
+                cambiados += 1
+        btn.setEnabled(bool(cambiados))
+        if cambiados:
+            btn.setText(f"Guardar en el ratón ({cambiados} sin guardar)")
+            btn.setToolTip("")
+        else:
+            btn.setText("Guardar los botones en el ratón")
+            btn.setToolTip("Cambia alguna acción para poder guardar")
 
     def _guardar_botones(self) -> None:
         from .. import onboard as ob_mod
@@ -926,9 +955,23 @@ class PaginaRaton(QWidget):
         self._combos_boton = []
         t_bot = Tarjeta(
             "Botones",
-            "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
-            "modo onboard: en modo host manda el firmware y estos ajustes no se "
-            "aplican.")
+            "Lo que hace cada botón, guardado dentro del ratón. Elige la acción "
+            "y pulsa «Guardar los botones en el ratón», abajo: hasta entonces "
+            "no se cambia nada.")
+        # Enterarse de que en modo host esto no se aplica DESPUÉS de guardarlo
+        # es enterarse tarde: se pasa media hora cambiando botones que el
+        # firmware ignora. El aviso va aquí arriba y sólo cuando toca.
+        try:
+            en_host = self.raton.onboard.es_host()
+        except Exception:
+            en_host = False
+        if en_host:
+            aviso_host = QLabel(
+                "⚠ Tu ratón está en modo host, y en ese modo manda el firmware: "
+                "lo que guardes aquí no se aplicará hasta que vuelvas a modo "
+                "onboard, en «Memoria del ratón».")
+            aviso_host.setWordWrap(True)
+            t_bot.añadir(aviso_host)
         # El esquema es un dibujo genérico de ratón diestro, y se adapta a los
         # botones que tenga: los seis primeros van a sitios reconocibles y el
         # resto al lateral. Pulsar en uno lleva el foco a su desplegable, para
@@ -957,14 +1000,18 @@ class PaginaRaton(QWidget):
             combo.setCurrentText(actual)
             lay.addWidget(combo, 1)
             combo.currentIndexChanged.connect(self._refrescar_diagrama)
+            combo.currentIndexChanged.connect(self._refrescar_boton_guardar)
             t_bot.añadir(fila)
             self._combos_boton.append(combo)
         self._refrescar_diagrama()
 
-        btn_bot = QPushButton(icono("document-save"),
-                              "Guardar los botones en el ratón")
-        btn_bot.clicked.connect(self._guardar_botones)
-        t_bot.añadir(_suelto(btn_bot))
+        self._btn_botones = QPushButton(icono("document-save"),
+                                        "Guardar los botones en el ratón")
+        self._btn_botones.clicked.connect(self._guardar_botones)
+        self._btn_botones.setEnabled(False)
+        self._btn_botones.setToolTip("Cambia alguna acción para poder guardar")
+        t_bot.añadir(_suelto(self._btn_botones))
+        self._refrescar_boton_guardar()
         return t_bot
 
     def _tab_botones(self) -> QWidget:

@@ -24,6 +24,7 @@ import signal
 import sys
 
 from .device import discover
+from .transport import DispositivoOcupado
 from .engine import Motor
 from .profiles import Almacen, Perfil, leer_modo_preferido
 from .watcher.gamemode import VigilanteGameMode
@@ -46,6 +47,9 @@ class Demonio:
         self._id_aviso = 0
         self._dpi_visto: int | None = None
         self._aviso_onboard = False
+        # Pings fallidos seguidos. Por radio se pierde alguno de vez en cuando,
+        # y uno solo no puede significar "lo has desconectado".
+        self._fallos_seguidos = 0
         self.jugando: dict[int, str] = {}      # pid -> id de perfil aplicado
         self._pids: set[int] = set()           # visto por CUALQUIER vigilante
         self.servicio = None                   # interfaz D-Bus, para las señales
@@ -76,25 +80,60 @@ class Demonio:
         return True
 
     async def vigilar_conexion(self) -> None:
-        """Reintenta cada pocos segundos mientras no haya ratón, y detecta
-        también que lo has desconectado."""
+        """Reintenta mientras no haya ratón, y detecta que lo has desconectado."""
         while True:
             await asyncio.sleep(5)
-            if self.raton is None:
-                if self.buscar_raton():
-                    self.aplicar_por_defecto("ratón conectado")
-            else:
-                try:
-                    # `estado()` se traga los errores para poder pintar la
-                    # interfaz aunque falle un ajuste, así que no sirve para
-                    # saber si el ratón sigue ahí: hay que preguntárselo.
-                    if not self.raton.hpp.ping(timeout=0.5):
-                        raise OSError("sin respuesta")
-                    await self._mirar_dpi()
-                    self._reponer_si_ha_derivado()
-                except Exception:
-                    log.info("se ha perdido el ratón")
-                    self.raton, self.motor = None, None
+            await self.revisar_conexion()
+
+    async def revisar_conexion(self) -> None:
+        """Un ciclo de vigilancia. Separado del bucle para poder probarlo.
+
+        Distinguir "no contesta" de "no está" es lo que evita que el perfil se
+        reaplique solo cada dos por tres: el nodo hidraw es de uno a la vez, y
+        cuando lo tiene la interfaz este ping falla sin que el ratón se haya
+        movido de sitio.
+        """
+        if self.raton is None:
+            if self.buscar_raton():
+                self.aplicar_por_defecto("ratón conectado")
+            return
+
+        try:
+            # `estado()` se traga los errores para poder pintar la interfaz
+            # aunque falle un ajuste, así que no sirve para saber si el ratón
+            # sigue ahí: hay que preguntárselo.
+            if not self.raton.hpp.ping(timeout=0.5):
+                raise OSError("sin respuesta")
+        except DispositivoOcupado:
+            # El nodo lo tiene otro proceso, normalmente la interfaz. Eso NO es
+            # que el ratón se haya ido: es que está ocupado medio segundo.
+            # Darlo por perdido hacía que al recuperarlo se reaplicara el
+            # perfil, y con la ventana abierta —que mira cada 800 ms— eso
+            # pasaba decenas de veces por hora.
+            return
+        except Exception:
+            self._fallos_seguidos += 1
+            # Un fallo suelto no es una desconexión: por radio se pierde un
+            # paquete de vez en cuando. Tres oportunidades antes de darlo por ido.
+            if self._fallos_seguidos < 3:
+                log.debug("el ratón no ha contestado (%d de 3)",
+                          self._fallos_seguidos)
+                return
+            log.info("se ha perdido el ratón")
+            self.raton, self.motor = None, None
+            self._fallos_seguidos = 0
+            return
+
+        self._fallos_seguidos = 0
+        try:
+            await self._mirar_dpi()
+            self._reponer_si_ha_derivado()
+        except DispositivoOcupado:
+            return
+        except Exception as e:
+            # Que falle revisar el estado no significa que el ratón no esté:
+            # el ping acaba de contestar.
+            log.debug("no se pudo revisar el estado: %s", e)
 
     # -- perfiles -------------------------------------------------------------
 

@@ -907,23 +907,33 @@ def bloque_features_ocultas(s: Sonda, objetivo_hz: int = 4000) -> None:
 # bloque de 11 que guarda el perfil onboard: es el mismo espacio, y eso quedó
 # claro al ver que el G203 tenía 0x04 guardado y 0x04 en su lista de efectos.
 #
-# El 0x00 es seguro: no lleva parámetros. Los demás son hipótesis mientras
-# nadie confirme el nombre con la luz delante — un identificador no dice qué
-# se ve.
+# Confirmados mirando la luz de un G203 (25-08-2026, `--probar-efectos`):
+# el 0x00 apaga, el 0x01 es color fijo y los bytes 1, 2 y 3 son R, G y B —se
+# le pidió FF 00 00 y se puso rojo, y 00 00 FF y se puso azul—, y el 0x04 es
+# el arcoíris que se mueve.
+#
+# Los demás siguen sin nombre a propósito. Escritos con los parámetros a cero,
+# el 0x03 y el 0x04 se quedaban en rojo fijo, el 0x0A y el 0x0D apagados, y el
+# 0x0E parpadeaba: eso dice que necesitan parámetros, no qué son.
 EFECTOS = {
     0x0000: "apagado",
-    0x0001: "¿color fijo?",
-    0x0003: "¿ciclo de color?",
-    0x0004: "¿onda de color?",
-    0x000A: "¿respiración?",
-    0x000D: "¿?",
-    0x000E: "¿?",
+    0x0001: "color fijo",
+    0x0003: "sin identificar",
+    0x0004: "arcoíris en movimiento",
+    0x000A: "sin identificar",
+    0x000D: "sin identificar",
+    0x000E: "sin identificar",
 }
+
+# Confirmados con la luz delante, no deducidos.
+EFECTOS_CIERTOS = {0x0000, 0x0001, 0x0004}
 
 
 def nombre_efecto(ident: int) -> str:
-    nombre = EFECTOS.get(ident)
-    return f"({nombre})" if nombre else "(sin identificar)"
+    nombre = EFECTOS.get(ident, "sin identificar")
+    # La marca importa: la mitad de esta tabla se sabe porque alguien miró la
+    # luz, y la otra mitad no se sabe. Mezclarlas sería perder el dato.
+    return f"({nombre})" if ident in EFECTOS_CIERTOS else f"({nombre}?)"
 
 
 def bloque_dpi_clasico(s: Sonda) -> None:
@@ -1083,7 +1093,7 @@ def describir_efecto(b: bytes) -> str:
     # pensar que el efecto era negro.
     if tipo == 0x01:
         return f"{etiqueta} #{b[1]:02X}{b[2]:02X}{b[3]:02X}"
-    return f"{etiqueta}   parámetros: {b[1:].hex(' ')}"
+    return f"{etiqueta}   parámetros: {b[4:].hex(' ')}"
 
 
 def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:
@@ -1538,6 +1548,113 @@ def _escribir_efecto(s: Sonda, sector: int, original: bytes,
         return False
     # El ratón puede contestar "sin error" y no haber hecho nada: se relee.
     return leer_sector(s, sector, tam) == nuevo
+
+
+def bloque_afinar_luces(s: Sonda, sector: int, ruta_copia: str) -> None:
+    """Averigua qué hace cada byte del bloque de efecto, variándolo solo.
+
+    Ya se sabe que el primer byte es el efecto y que el 1, 2 y 3 son el color.
+    Del 4 al 10 hay parámetros que el ratón sí usa —el mismo efecto con ellos
+    a cero deja de moverse— pero no se sabe cuál es cuál.
+
+    La forma de averiguarlo es la de siempre: cambiar UNA cosa y mirar. Se
+    parte del bloque que el ratón tiene puesto, se altera un byte, y se
+    pregunta qué ha cambiado respecto a lo anterior. Comparar contra el efecto
+    de al lado es más fácil que describir en abstracto.
+
+    Escribe en el ratón, con las mismas redes que `--probar-efectos`.
+    """
+    titulo("AFINAR LOS PARÁMETROS DE LA LUZ")
+
+    info = s.llamar(0x8100, 0x00)
+    if not info:
+        print("  No se pudo leer la información de perfiles.")
+        return
+    tam = int.from_bytes(info[7:9], "big")
+    original = leer_sector(s, sector, tam)
+    if original is None or len(original) != tam:
+        print("  No se pudo leer el sector entero.")
+        return
+    if crc16_ccitt(original[:tam - 2]) != int.from_bytes(original[tam - 2:], "big"):
+        print("  El CRC del sector no cuadra. No se toca nada.")
+        return
+
+    base = original[208:219]
+    if not any(base) or all(x == 0xFF for x in base):
+        print("  Este perfil no tiene ningún efecto guardado que afinar.")
+        return
+
+    with open(ruta_copia, "wb") as fh:
+        fh.write(original)
+
+    print(f"  Copia del perfil guardada en {ruta_copia}")
+    print(f"  Efecto de partida: {base.hex(' ')}")
+    print(f"                     {describir_efecto(base)}")
+    print()
+    print("  Voy a cambiar un byte cada vez y preguntarte qué ha cambiado")
+    print("  RESPECTO A LO ANTERIOR: más rápido, más lento, más brillante,")
+    print("  más tenue, otro color, igual que antes...")
+    print()
+    try:
+        input("  Enter para empezar, o Ctrl-C para dejarlo: ")
+    except (KeyboardInterrupt, EOFError):
+        print("\n  Cancelado. No se ha escrito nada.")
+        return
+
+    def variar(pos: int, valor: int) -> bytes:
+        b = bytearray(base)
+        b[pos] = valor
+        return bytes(b)
+
+    # Se prueban los bytes que no están a cero en el original: los que el ratón
+    # usa de verdad. Cada uno, a un valor mucho mayor y a uno mucho menor.
+    interesantes = [i for i in range(4, 11) if base[i]]
+    pruebas: list[tuple[bytes, str]] = [(base, "el que tenías, sin tocar (control)")]
+    for pos in interesantes:
+        v = base[pos]
+        for nuevo_v, como in ((min(0xFF, v * 4), "x4"), (v // 4, "÷4")):
+            # Un valor que sale igual al que ya había no es una prueba: sería
+            # preguntarle a alguien qué ha cambiado cuando no ha cambiado nada.
+            if nuevo_v == v or nuevo_v == 0:
+                continue
+            pruebas.append((variar(pos, nuevo_v),
+                            f"byte {pos}: de 0x{v:02X} a 0x{nuevo_v:02X} ({como})"))
+
+    respuestas: list[tuple[str, str]] = []
+    try:
+        for bloque, etiqueta in pruebas:
+            if not _escribir_efecto(s, sector, original, bloque, tam):
+                print(f"     {etiqueta}: no se pudo escribir, se salta")
+                continue
+            print(f"\n  --- {etiqueta} ---")
+            print(f"      {bloque.hex(' ')}")
+            try:
+                visto = input("     ¿Qué ha cambiado? ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\n  Cortado por el usuario.")
+                break
+            respuestas.append((etiqueta, visto or "(sin respuesta)"))
+    finally:
+        print("\n  Devolviendo el perfil a como estaba...")
+        try:
+            escribir_sector(s, sector, original)
+            if leer_sector(s, sector, tam) == original:
+                print("  Restaurado y comprobado: el sector es idéntico al de antes.")
+            else:
+                print(f"  ⚠ No coincide. Restaura con: sudo python3 depurar.py "
+                      f"--restaurar {ruta_copia} --sector {sector}")
+        except (HidppError, NoResponse, OSError) as e:
+            print(f"  ⚠ No se pudo restaurar ({e}). Hazlo con:")
+            print(f"     sudo python3 depurar.py --restaurar {ruta_copia} "
+                  f"--sector {sector}")
+
+    if respuestas:
+        print("\n" + "=" * 72)
+        print("  RESULTADO — esto es lo que hay que mandar:")
+        print("=" * 72)
+        print(f"  efecto de partida: {base.hex(' ')}")
+        for etiqueta, visto in respuestas:
+            print(f"  {etiqueta:<38} → {visto}")
 
 
 def bloque_cambiar_boton(s: Sonda, sector: int, numero: int, accion: str,
@@ -2047,6 +2164,9 @@ def main() -> int:
     ap.add_argument("--probar-efectos", action="store_true",
                     help="prueba guiada: escribe cada efecto de luz y pregunta "
                          "qué se ve. Restaura el perfil al terminar")
+    ap.add_argument("--afinar-luces", action="store_true",
+                    help="varía un byte cada vez del efecto que tengas puesto, "
+                         "para saber cuál es la velocidad y cuál el brillo")
     ap.add_argument("--leds", action="store_true",
                     help="vuelca lo que el ratón diga de su iluminación")
     ap.add_argument("--informe", nargs="?", const="gpx2-informe.txt",
@@ -2117,6 +2237,9 @@ def main() -> int:
 
     print(f"  {node.id_str} · {node.name} · {len(s.tabla)} features")
 
+    if args.afinar_luces:
+        bloque_afinar_luces(s, args.sector_perfil, args.copia)
+        return
     if args.probar_efectos:
         bloque_probar_efectos(s, args.sector_perfil, args.copia)
         return

@@ -395,3 +395,78 @@ mirar. `--leds` los recoge cuando aparezca alguien que sí las tenga.
 5. Se pasa el `CONFIANZA` de la clase a `"verificada"` y se anota aquí.
 
 Nunca al revés: primero el volcado, después el decodificador.
+
+## Iluminación (0x8071 y el perfil onboard)
+
+Decodificada en parte contra un **G203 LIGHTSYNC** (`046d:c092`, por cable),
+el 25-08-2026. Lo de aquí está confirmado mirando la luz, no deducido.
+
+### Qué efectos tiene un ratón
+
+`0x8071` función **0** es `getInfo(zona, efecto, tipo)`, y **0xFF significa
+"háblame de ti"**. Con ceros contesta dieciséis ceros, que despistó un rato.
+Los **dos primeros bytes de la respuesta son el eco de lo preguntado**: los
+datos empiezan en el tercero.
+
+```
+f0 con FF FF 00  ->  ff 00 01 00 03 00 04 …
+                           ^^ nº de zonas de luz (1)
+
+f0 con 00 FF 00  ->  00 00 00 02 07 01 …
+                        ^^^^^ dónde está la luz (0x0002)
+                              ^^ efectos que admite (7)
+
+f0 con 00 03 00  ->  00 03 00 04 84 21 00 1e
+                     ^^ zona
+                        ^^ índice del efecto
+                           ^^^^^ IDENTIFICADOR del efecto (0x0004)
+                                 ^^^^^^^^^^^ sus parámetros por defecto
+```
+
+El G203 declara siete: `0x00`, `0x01`, `0x03`, `0x04`, `0x0A`, `0x0D`, `0x0E`.
+
+### El perfil onboard guarda el mismo identificador
+
+En la disposición clásica hay **dos** bloques de 11 bytes desde el byte 208
+(la del 0x07 reserva sitio para cuatro). El primer byte de cada bloque sale de
+la **misma lista** que declara `0x8071`: el G203 tenía `0x04` guardado y `0x04`
+en su lista. No son dos espacios de valores distintos.
+
+```
+04 00 00 00 00 00 00 40 01 00 1f
+^^ identificador del efecto
+   ^^^^^^^^ color: R, G, B
+            ^^^^^^^^^^^^^^^^^^^^ parámetros, según el efecto
+```
+
+**El color está confirmado**: se le escribió `01 FF 00 00` y la luz se puso
+roja, y `01 00 00 FF` y se puso azul.
+
+### Efectos identificados
+
+| id | qué se ve | cómo se sabe |
+|----|-----------|--------------|
+| `0x00` | apagado | escrito y mirado |
+| `0x01` | color fijo, con RGB en los bytes 1-3 | escrito y mirado |
+| `0x04` | arcoíris en movimiento | era el que tenía puesto |
+| `0x03`, `0x0A`, `0x0D`, `0x0E` | sin identificar | — |
+
+### Los parámetros mandan
+
+El mismo efecto con los parámetros a cero deja de ser el mismo:
+
+```
+04 00 00 00 00 00 00 40 01 00 1f  ->  arcoíris que se mueve
+04 00 00 00 00 00 00 00 00 00 00  ->  rojo fijo
+```
+
+Un ciclo de color con el periodo a cero no avanza y se queda parado en su
+primer color, que es el rojo. Por eso escribir los identificadores "pelados"
+daba resultados engañosos: el `0x03` y el `0x04` salían rojo fijo, el `0x0A` y
+el `0x0D` apagados, y el `0x0E` parpadeando. Eso dice que necesitan
+parámetros, no qué son.
+
+**Sin decodificar todavía**: cuál de los bytes 4 a 10 es la velocidad y cuál el
+brillo. En el G203 sólo tres no están a cero: el 7 (`0x40`), el 8 (`0x01`) y el
+10 (`0x1F`). `depurar.py --afinar-luces` los varía de uno en uno y pregunta qué
+cambia.

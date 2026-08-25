@@ -290,18 +290,42 @@ class DiagramaRaton(QWidget):
 
     pulsado = Signal(int)
 
-    # Para cada botón: dónde está sobre el cuerpo (x, y), a qué altura va su
-    # etiqueta y de qué lado. La etiqueta no va a la altura del punto a
-    # propósito: el clic derecho y la rueda están casi juntos y sus textos se
-    # pisarían. La línea guía se encarga de unirlos.
-    #             x     y   etiqueta  lado
+    # Dónde está cada botón sobre el cuerpo (x, y) y de qué lado sale su
+    # etiqueta. Los cinco primeros son la disposición de casi cualquier ratón
+    # diestro; el sexto, el botón de DPI detrás de la rueda, que también es
+    # donde lo pone casi todo el mundo.
+    #             x     y    lado
     SITIOS = [
-        (0.28, 0.15, 0.10, "izquierda"),    # clic izquierdo
-        (0.72, 0.15, 0.10, "derecha"),      # clic derecho
-        (0.50, 0.20, 0.32, "derecha"),      # central / rueda
-        (0.05, 0.34, 0.36, "izquierda"),    # lateral trasero
-        (0.05, 0.45, 0.56, "izquierda"),    # lateral delantero
+        (0.28, 0.15, "izquierda"),      # clic izquierdo
+        (0.72, 0.15, "derecha"),        # clic derecho
+        (0.50, 0.20, "derecha"),        # central / rueda
+        (0.05, 0.34, "izquierda"),      # lateral trasero
+        (0.05, 0.45, "izquierda"),      # lateral delantero
+        (0.50, 0.31, "derecha"),        # detrás de la rueda: DPI
     ]
+
+    # A partir del séptimo ya no sabemos dónde está cada uno: un G502 y un
+    # ratón de MMO no los ponen en el mismo sitio, y el ratón no dice dónde
+    # tiene nada. Se reparten por el lateral del pulgar, que es donde suelen
+    # ir, y el dibujo no pretende ser un plano: es un esquema para saber qué
+    # hace cada botón, no para reconocerlo a ciegas.
+    EXTRA_X = 0.05
+    EXTRA_DESDE, EXTRA_HASTA = 0.55, 0.80
+
+    def _sitios(self) -> list[tuple[float, float, str]]:
+        """Los sitios de los botones que haya, sean cinco o quince."""
+        n = len(self.acciones)
+        if n <= len(self.SITIOS):
+            return self.SITIOS[:n]
+        sitios = list(self.SITIOS)
+        sobran = n - len(self.SITIOS)
+        for i in range(sobran):
+            # Repartidos a lo largo del lateral, sin amontonarse aunque sean
+            # muchos: con uno solo va en medio del tramo.
+            t = (i + 1) / (sobran + 1)
+            y = self.EXTRA_DESDE + (self.EXTRA_HASTA - self.EXTRA_DESDE) * t
+            sitios.append((self.EXTRA_X, y, "izquierda"))
+        return sitios
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -314,31 +338,86 @@ class DiagramaRaton(QWidget):
 
     def poner(self, acciones: list[str]) -> None:
         self.acciones = list(acciones)
+        # Con muchos botones las etiquetas piden más sitio del que ocupa el
+        # dibujo: si no, se salen por abajo o se aprietan hasta tocarse. Manda
+        # el lado más cargado, no la mitad del total: los que no caben en la
+        # anatomía conocida van todos al lateral, así que los lados no se
+        # reparten a partes iguales ni de lejos.
+        sitios = self._sitios()
+        peor = max((sum(1 for _, _, l in sitios if l == lado)
+                    for lado in ("izquierda", "derecha")), default=1)
+        self.setMinimumHeight(max(360, peor * (self.ALTO_ETIQUETA + 6) + 60))
         self.update()
 
     # -- geometría ------------------------------------------------------------
 
+    ALTO_MAXIMO_CUERPO = 420
+
     def _cuerpo(self) -> QRectF:
-        """El contorno del ratón, centrado y dejando sitio a las etiquetas."""
-        alto = self.height() - 24
+        """El contorno del ratón, centrado y dejando sitio a las etiquetas.
+
+        Con un tope: un ratón de doce botones necesita mucho alto para sus
+        etiquetas, pero el dibujo tiene que seguir pareciendo un ratón. Sin
+        esto se estiraba hasta llenar el widget y acababa siendo un óvalo
+        gigante con los textos pegados a los lados.
+        """
+        alto = min(self.height() - 24, self.ALTO_MAXIMO_CUERPO)
         ancho = alto * 0.62
-        return QRectF((self.width() - ancho) / 2, 12, ancho, alto)
+        arriba = max(12, (self.height() - alto) / 2)
+        return QRectF((self.width() - ancho) / 2, arriba, ancho, alto)
 
     def _punto(self, i: int) -> QPointF:
         c = self._cuerpo()
-        x, y = self.SITIOS[i][0], self.SITIOS[i][1]
+        sitios = self._sitios()
+        if i >= len(sitios):
+            return QPointF(c.center().x(), c.center().y())
+        x, y, _ = sitios[i]
         return QPointF(c.left() + c.width() * x, c.top() + c.height() * y)
+
+    ALTO_ETIQUETA = 26
+
+    def _alturas(self) -> dict[int, float]:
+        """A qué altura va la etiqueta de cada botón, en píxeles.
+
+        No se puede usar la del punto: el clic derecho y la rueda están casi
+        juntos y sus textos se pisarían, y con muchos botones se pisarían casi
+        todos. Se reparten por lado, en orden y equiespaciadas, y la línea
+        guía se encarga de unir cada texto con su botón.
+        """
+        c = self._cuerpo()
+        alturas: dict[int, float] = {}
+        sitios = self._sitios()
+        for lado in ("izquierda", "derecha"):
+            # En orden de arriba abajo, para que las guías no se crucen.
+            ids = [i for i, (_, _, l) in enumerate(sitios) if l == lado]
+            ids.sort(key=lambda i: sitios[i][1])
+            if not ids:
+                continue
+            hueco = self.ALTO_ETIQUETA + 6
+            alto_total = hueco * len(ids)
+            # Se reparten sobre el widget entero, no sobre el cuerpo: cuando
+            # hay más etiquetas que sitio en el dibujo, el que sobra está
+            # fuera de él.
+            if alto_total <= c.height():
+                arriba = c.top() + (c.height() - alto_total) * 0.28
+            else:
+                arriba = max(4, (self.height() - alto_total) / 2)
+            for orden, i in enumerate(ids):
+                alturas[i] = arriba + hueco * orden + hueco / 2
+        return alturas
 
     def _zona_etiqueta(self, i: int) -> QRectF:
         c = self._cuerpo()
-        y, lado = self.SITIOS[i][2], self.SITIOS[i][3]
-        alto = 26
-        cy = c.top() + c.height() * y - alto / 2
+        sitios = self._sitios()
+        if i >= len(sitios):
+            return QRectF()
+        lado = sitios[i][2]
+        cy = self._alturas().get(i, c.center().y()) - self.ALTO_ETIQUETA / 2
         margen = 12
         if lado == "izquierda":
-            return QRectF(margen, cy, c.left() - margen * 2, alto)
+            return QRectF(margen, cy, c.left() - margen * 2, self.ALTO_ETIQUETA)
         return QRectF(c.right() + margen, cy,
-                      self.width() - c.right() - margen * 2, alto)
+                      self.width() - c.right() - margen * 2, self.ALTO_ETIQUETA)
 
     # -- pintado --------------------------------------------------------------
 
@@ -379,26 +458,35 @@ class DiagramaRaton(QWidget):
         p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.18))
         p.drawRoundedRect(rueda, rueda.width() / 2, rueda.width() / 2)
 
-        # Los dos laterales.
-        for i in (3, 4):
-            if i >= len(self.acciones):
+        # Los botones del lateral: todos los que caen sobre el borde, sean los
+        # dos de siempre o los siete de un ratón de MMO.
+        sitios = self._sitios()
+        p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.18))
+        for i, (x, _, _) in enumerate(sitios[:len(self.acciones)]):
+            if x > 0.10:
                 continue
             pt = self._punto(i)
-            lateral = QRectF(pt.x() - c.width() * 0.015, pt.y() - c.height() * 0.035,
-                             c.width() * 0.07, c.height() * 0.07)
-            p.setBrush(mezclar(pal.color(QPalette.ColorRole.Window), texto, 0.18))
+            lateral = QRectF(pt.x() - c.width() * 0.015, pt.y() - c.height() * 0.030,
+                             c.width() * 0.07, c.height() * 0.06)
             p.drawRoundedRect(lateral, 3, 3)
+
+        # Y el de detrás de la rueda, si el ratón lo tiene.
+        if len(self.acciones) > 5:
+            pt = self._punto(5)
+            p.drawRoundedRect(QRectF(pt.x() - c.width() * 0.035,
+                                     pt.y() - c.height() * 0.018,
+                                     c.width() * 0.07, c.height() * 0.036), 3, 3)
 
         # Guías y etiquetas.
         fuente = QFont(self.font())
         fuente.setPointSizeF(max(8.0, fuente.pointSizeF() - 0.5))
         p.setFont(fuente)
-        for i, accion in enumerate(self.acciones[:len(self.SITIOS)]):
+        for i, accion in enumerate(self.acciones):
             activo = i == self.resaltado
             color = realce if activo else linea
             pt = self._punto(i)
             zona = self._zona_etiqueta(i)
-            lado = self.SITIOS[i][3]
+            lado = sitios[i][2]
             # La guía sale del texto HACIA el ratón, con un hueco para no
             # tocarlo: un tramo recto y luego la diagonal hasta el botón.
             hacia = 1 if lado == "izquierda" else -1
@@ -422,7 +510,7 @@ class DiagramaRaton(QWidget):
     # -- interacción ----------------------------------------------------------
 
     def _cerca_de(self, pos) -> int | None:
-        for i in range(min(len(self.acciones), len(self.SITIOS))):
+        for i in range(len(self.acciones)):
             if self._zona_etiqueta(i).adjusted(-8, -6, 8, 6).contains(pos):
                 return i
             pt = self._punto(i)

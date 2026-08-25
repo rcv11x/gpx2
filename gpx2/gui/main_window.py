@@ -621,11 +621,17 @@ class PaginaRaton(QWidget):
         self._pintar_aviso_modo()
 
         # -- niveles de sensibilidad -------------------------------------------
+        # Cuántos escalones hay lo dice el perfil, no una constante: el PRO X 2
+        # guarda cinco y el G203 cuatro.
+        cuantos = len(perfil.niveles)
+        nombres = {1: "El escalón", 2: "Los dos escalones",
+                   3: "Los tres escalones", 4: "Los cuatro escalones",
+                   5: "Los cinco escalones"}
         t_niv = Tarjeta(
             "Niveles de sensibilidad",
-            "Los cinco escalones que guarda el ratón. Son por los que va pasando "
-            "el botón de «Ciclar DPI», y el marcado como inicial es el que tiene "
-            "al encenderse.")
+            f"{nombres.get(cuantos, f'Los {cuantos} escalones')} que guarda el "
+            "ratón. Son por los que va pasando el botón de «Ciclar DPI», y el "
+            "marcado como inicial es el que tiene al encenderse.")
         self._spins_nivel = []
         try:
             validos = self.raton.dpi.valores_validos() if self.raton.dpi else []
@@ -674,9 +680,10 @@ class PaginaRaton(QWidget):
             "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
             "modo onboard: en modo host manda el firmware y estos ajustes no se "
             "aplican.")
-        # El esquema es un dibujo genérico de ratón diestro de cinco botones,
-        # que es la disposición de casi todos. Pulsar en uno lleva el foco a su
-        # desplegable, para no tener que contar cuál es cuál.
+        # El esquema es un dibujo genérico de ratón diestro, y se adapta a los
+        # botones que tenga: los seis primeros van a sitios reconocibles y el
+        # resto al lateral. Pulsar en uno lleva el foco a su desplegable, para
+        # no tener que contar cuál es cuál.
         self._diagrama = DiagramaRaton()
         self._diagrama.pulsado.connect(self._enfocar_boton)
         t_bot.añadir(self._diagrama)
@@ -1760,9 +1767,15 @@ class VentanaPrincipal(QMainWindow):
             punteros = []
 
         if self.demo:
-            # Ratón inventado, para trabajar en la interfaz sin hardware.
+            # Ratón inventado, para trabajar en la interfaz sin hardware. Cuál,
+            # lo dice self.demo: "g203" trae el clásico, con luces y seis
+            # botones, y cualquier otra cosa el PRO X 2. Poder cambiar de ratón
+            # simulado es lo que permite ver cómo queda la interfaz con uno que
+            # no tienes delante.
             from ..mock import raton_simulado
-            self.hallazgo.ratones.append(raton_simulado())
+            from ..modelos import MODELOS, SL2
+            modelo = MODELOS.get(str(self.demo).lower(), SL2)
+            self.hallazgo.ratones.append(raton_simulado(modelo))
 
         # Los ratones HID++ ya tienen su propia entrada; no los repetimos abajo.
         # Hace falta comparar también por nombre: por receptor, HID++ ve el

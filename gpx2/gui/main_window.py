@@ -28,7 +28,7 @@ from .widgets import (ColumnaCentrada, DelegadoDispositivo,
                       DiagramaRaton, FilaSlider, FilaSliderLista,
                       icono,
                       ROL_ENCABEZADO, ROL_SUB, Tarjeta, hoja_de_estilo,
-                      icono_dispositivo,
+                      icono_dispositivo, proteger_de_la_rueda,
                       pastilla)
 
 ROL_DATOS = Qt.ItemDataRole.UserRole
@@ -360,9 +360,15 @@ class PaginaRaton(QWidget):
 
     def _tarjeta_dpi(self, dpi) -> Tarjeta:
         cap = self.raton.dpi
-        t = Tarjeta("Sensibilidad del sensor",
+        # El título dice "ahora mismo" a propósito. Esto y los escalones que se
+        # editan en «Memoria del ratón» son cosas distintas —una es el DPI en
+        # caliente y la otra lo que el ratón guarda—, y llamarse las dos
+        # "sensibilidad" las hacía parecer la misma pantalla repetida.
+        t = Tarjeta("Sensibilidad, ahora mismo",
                     "Cuántos puntos por pulgada mide el sensor. A más DPI, más "
-                    "recorre el puntero con el mismo movimiento de la mano.")
+                    "recorre el puntero con el mismo movimiento de la mano. "
+                    "Esto cambia el ratón al momento; para que lo recuerde al "
+                    "apagarlo, guárdalo en «Memoria del ratón».")
 
         try:
             validos = cap.valores_validos()
@@ -391,8 +397,10 @@ class PaginaRaton(QWidget):
                 lay.addWidget(b)
                 self._botones_dpi.append((v, b))
             lay.addStretch(1)
-            etiqueta = QLabel("Niveles guardados en el ratón")
+            etiqueta = QLabel("Atajos: los escalones que recorre el botón de "
+                              "DPI de tu ratón. Se editan en «Memoria del ratón»")
             etiqueta.setObjectName("Suave")
+            etiqueta.setWordWrap(True)
             t.añadir(etiqueta)
             t.añadir(fila)
 
@@ -577,10 +585,10 @@ class PaginaRaton(QWidget):
 
         cabecera = Tarjeta(
             "Memoria del ratón",
-            "Tu ratón guarda dentro sus propios ajustes: la sensibilidad y la "
-            "frecuencia de sondeo. Eso sobrevive a apagarlo y funciona en "
-            "cualquier ordenador, sin este programa ni ningún otro. Lo que hace "
-            "cada botón se guarda aquí también, y se cambia en «Botones».")
+            "Lo que el ratón lleva dentro y no se le olvida al apagarlo: los "
+            "escalones de DPI de su botón, la frecuencia de sondeo y lo que "
+            "hace cada botón. Funciona en cualquier ordenador, sin este "
+            "programa ni ningún otro. Los botones se cambian en «Botones».")
 
         crudo, perfil, error = self._leer_perfil_ob()
         if error is not None:
@@ -590,7 +598,7 @@ class PaginaRaton(QWidget):
         cabecera.añadir(QLabel(
             f"Guardado ahora mismo: {perfil.tasa_hz} Hz, "
             f"{perfil.dpi_por_defecto} DPI al encender, y "
-            f"{len(perfil.niveles)} niveles de sensibilidad "
+            f"{len(perfil.niveles)} escalones de DPI "
             f"({', '.join(str(n.x) for n in perfil.niveles)})."))
 
         # -- modo ------------------------------------------------------------
@@ -613,18 +621,19 @@ class PaginaRaton(QWidget):
         t_modo.añadir(_suelto(btn_modo))
         self._pintar_aviso_modo()
 
-        # -- niveles de sensibilidad -------------------------------------------
+        # -- escalones del botón de DPI ----------------------------------------
         # Cuántos escalones hay lo dice el perfil, no una constante: el PRO X 2
         # guarda cinco y el G203 cuatro.
         cuantos = len(perfil.niveles)
-        nombres = {1: "El escalón", 2: "Los dos escalones",
-                   3: "Los tres escalones", 4: "Los cuatro escalones",
-                   5: "Los cinco escalones"}
+        nombres = {1: "el escalón", 2: "los dos escalones",
+                   3: "los tres escalones", 4: "los cuatro escalones",
+                   5: "los cinco escalones"}
         t_niv = Tarjeta(
-            "Niveles de sensibilidad",
-            f"{nombres.get(cuantos, f'Los {cuantos} escalones')} que guarda el "
-            "ratón. Son por los que va pasando el botón de «Ciclar DPI», y el "
-            "marcado como inicial es el que tiene al encenderse.")
+            "Escalones del botón de DPI",
+            f"Tu ratón guarda {nombres.get(cuantos, f'{cuantos} escalones')} y "
+            "su botón de DPI va pasando por ellos. El marcado como inicial es "
+            "el que tiene al encenderse. Esto se queda dentro del ratón: "
+            "funciona sin este programa y en cualquier ordenador.")
         self._spins_nivel = []
         try:
             validos = self.raton.dpi.valores_validos() if self.raton.dpi else []
@@ -2043,6 +2052,9 @@ def main(demo: bool = False) -> int:
     app.setDesktopFileName(APP_ID)
     app.setWindowIcon(_icono())
     app.setStyleSheet(hoja_de_estilo(app.palette()))
+    # Se guarda en la propia app: si se lo lleva el recolector, la rueda vuelve
+    # a cambiar ajustes sin querer y no lo notaría nadie hasta usarlo.
+    app._filtro_rueda = proteger_de_la_rueda(app)
     ventana = VentanaPrincipal(demo=demo)
     ventana.show()
     return app.exec()

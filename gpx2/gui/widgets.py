@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import (QEvent, QObject, QPointF, QRect, QRectF,
+                            QSize, Qt, Signal)
 from PySide6.QtGui import (QColor, QFont, QIcon, QPainter, QPixmap,
                            QPainterPath, QPalette, QPen)
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QComboBox,
+                               QFrame, QHBoxLayout, QLabel,
                                QSizePolicy, QSlider, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QVBoxLayout, QWidget)
@@ -581,6 +583,42 @@ class DiagramaRaton(QWidget):
         i = self._cerca_de(evento.position())
         if i is not None:
             self.pulsado.emit(i)
+
+
+class RuedaSoloConFoco(QObject):
+    """Impide que la rueda cambie un control por el que sólo estás pasando.
+
+    Qt deja que la rueda mueva un desplegable, un contador o una barra aunque
+    no tengan el foco. Dentro de una ventana con scroll eso es una trampa: vas
+    a bajar por la página, el puntero cruza por encima de un desplegable y le
+    cambias el DPI sin enterarte. Y como la rueda del ratón ES lo que estás
+    configurando, es especialmente fácil de hacer.
+
+    Con esto, esos controles sólo responden a la rueda si antes has hecho clic
+    en ellos. El evento se deja pasar al padre, así que la página sigue
+    haciendo scroll como si el control no estuviera.
+    """
+
+    VIGILADOS = (QComboBox, QAbstractSpinBox, QSlider)
+
+    def eventFilter(self, obj, evento):
+        if (evento.type() == QEvent.Type.Wheel
+                and isinstance(obj, self.VIGILADOS)
+                and not obj.hasFocus()):
+            evento.ignore()
+            return True
+        return False
+
+
+def proteger_de_la_rueda(app) -> RuedaSoloConFoco:
+    """Instala el filtro y deja el foco de forma que no lo dé la rueda.
+
+    Se devuelve para que quien lo llame lo guarde: si se lo lleva el recolector
+    de basura, el filtro deja de aplicarse y el fallo vuelve en silencio.
+    """
+    filtro = RuedaSoloConFoco(app)
+    app.installEventFilter(filtro)
+    return filtro
 
 
 def carpeta_imagenes():

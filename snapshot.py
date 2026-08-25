@@ -11,7 +11,7 @@ pestana = int(sys.argv[3]) if len(sys.argv) > 3 else 0
 app = QApplication(sys.argv[:1])
 app.setApplicationName("gpx2")
 
-from gpx2.gui.widgets import hoja_de_estilo
+from gpx2.gui.widgets import hoja_de_estilo, proteger_de_la_rueda
 from gpx2.gui import main_window
 from gpx2 import desktop
 
@@ -26,6 +26,7 @@ if modo.startswith("demo") or modo in ("g203", "sl2"):
     main_window.desktop.buscar_puntero = lambda v, p: (_reales[0] if _reales else None)
 
 app.setStyleSheet(hoja_de_estilo(app.palette()))
+app._filtro_rueda = proteger_de_la_rueda(app)
 v = main_window.VentanaPrincipal(demo=(modo if modo.startswith("demo") or modo in ("g203", "sl2") else False))
 v.resize(1040, 700)
 v.show()

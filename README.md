@@ -14,6 +14,24 @@ que haya. Ver **`RATONES.md`** para los que han pasado por aquí y cómo añadir
 el tuyo, `PROTOCOLO.md` para el protocolo con los volcados al lado, y
 `ARQUITECTURA.md` para el diseño.
 
+## La foto de tu ratón
+
+El programa dibuja un esquema genérico, no una foto: las imágenes de producto
+son de sus fabricantes y este proyecto no las puede redistribuir.
+
+Pero puedes poner la tuya. Deja un PNG en `~/.config/gpx2/imagenes/` llamado
+como el identificador del dispositivo —el que sale bajo su nombre en la lista
+de la izquierda— y se usará en el esquema de botones y en esa lista:
+
+```
+~/.config/gpx2/imagenes/046d_c54d.png
+```
+
+Va mejor una imagen del ratón visto desde arriba y con el fondo transparente.
+Los puntos de los botones siguen siendo los del esquema, así que sobre una
+foto quedan aproximados; para saber qué botón es cuál basta con la línea guía
+y el número.
+
 ## Requisitos
 
 Sólo hay **dos dependencias externas**, y las dos vienen empaquetadas en

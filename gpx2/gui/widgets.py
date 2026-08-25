@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import (QColor, QFont, QIcon, QPainter,
+from PySide6.QtGui import (QColor, QFont, QIcon, QPainter, QPixmap,
                            QPainterPath, QPalette, QPen)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
                                QSizePolicy, QSlider, QStyle,
@@ -175,7 +175,11 @@ class FilaSlider(QWidget):
         fila.setSpacing(12)
 
         self.lbl = QLabel(etiqueta)
-        self.lbl.setMinimumWidth(150)
+        # Lo que ocupe el texto, no un ancho fijo: "Resolución" mide 61 px y
+        # reservaba 150, así que quedaba un pasillo vacío entre el rótulo y la
+        # barra. El mínimo es para que dos filas seguidas no bailen.
+        self.lbl.setMinimumWidth(
+            max(96, self.lbl.fontMetrics().horizontalAdvance(etiqueta) + 16))
         fila.addWidget(self.lbl)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -234,7 +238,11 @@ class FilaSliderLista(QWidget):
         fila.setSpacing(12)
 
         self.lbl = QLabel(etiqueta)
-        self.lbl.setMinimumWidth(150)
+        # Lo que ocupe el texto, no un ancho fijo: "Resolución" mide 61 px y
+        # reservaba 150, así que quedaba un pasillo vacío entre el rótulo y la
+        # barra. El mínimo es para que dos filas seguidas no bailen.
+        self.lbl.setMinimumWidth(
+            max(96, self.lbl.fontMetrics().horizontalAdvance(etiqueta) + 16))
         fila.addWidget(self.lbl)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -331,10 +339,29 @@ class DiagramaRaton(QWidget):
         super().__init__(parent)
         self.acciones: list[str] = []
         self.resaltado: int | None = None
+        self.imagen: QPixmap | None = None
         self.setMinimumHeight(360)
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
+
+    def poner_imagen(self, id_str: str) -> bool:
+        """Usa la foto que el usuario haya dejado para este ratón, si la hay.
+
+        El proyecto no trae fotos de fabricante —no son nuestras, y esto es
+        MIT—, pero cada uno puede poner la suya en su máquina. Los puntos de
+        los botones siguen siendo los del esquema genérico, así que sobre una
+        foto quedan aproximados: se dibujan igual porque lo que importa es
+        saber qué botón es cuál, y para eso basta con la guía y el número.
+        """
+        ruta = ruta_imagen_propia(id_str)
+        if ruta is None:
+            self.imagen = None
+            return False
+        px = QPixmap(str(ruta))
+        self.imagen = None if px.isNull() else px
+        self.update()
+        return self.imagen is not None
 
     def poner(self, acciones: list[str]) -> None:
         self.acciones = list(acciones)
@@ -431,6 +458,21 @@ class DiagramaRaton(QWidget):
 
         c = self._cuerpo()
 
+        if self.imagen is not None:
+            # La foto del usuario, encajada en el hueco del cuerpo y sin
+            # deformarla. El resto —guías, puntos y etiquetas— se pinta encima
+            # igual que sobre el dibujo.
+            escalada = self.imagen.scaled(
+                int(c.width()), int(c.height()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            p.drawPixmap(int(c.center().x() - escalada.width() / 2),
+                         int(c.center().y() - escalada.height() / 2),
+                         escalada)
+            self._pintar_guias(p, texto, realce, linea)
+            p.end()
+            return
+
         # Cuerpo: un óvalo alargado con la parte de abajo más recta, que es la
         # silueta de un ratón visto desde arriba.
         camino = QPainterPath()
@@ -477,7 +519,13 @@ class DiagramaRaton(QWidget):
                                      pt.y() - c.height() * 0.018,
                                      c.width() * 0.07, c.height() * 0.036), 3, 3)
 
-        # Guías y etiquetas.
+        self._pintar_guias(p, texto, realce, linea)
+        p.end()
+
+    def _pintar_guias(self, p, texto, realce, linea) -> None:
+        """Las líneas y los rótulos, iguales sobre el dibujo y sobre una foto."""
+        c = self._cuerpo()
+        sitios = self._sitios()
         fuente = QFont(self.font())
         fuente.setPointSizeF(max(8.0, fuente.pointSizeF() - 0.5))
         p.setFont(fuente)
@@ -505,7 +553,6 @@ class DiagramaRaton(QWidget):
                           else Qt.AlignmentFlag.AlignLeft)
             p.drawText(zona, int(alineacion | Qt.AlignmentFlag.AlignVCenter),
                        f"{i + 1}. {accion}")
-        p.end()
 
     # -- interacción ----------------------------------------------------------
 
@@ -534,6 +581,57 @@ class DiagramaRaton(QWidget):
         i = self._cerca_de(evento.position())
         if i is not None:
             self.pulsado.emit(i)
+
+
+def carpeta_imagenes():
+    """Donde el usuario puede dejar la foto de su ratón.
+
+    El proyecto no trae fotos de ningún fabricante: son suyas, y este
+    repositorio es MIT. Pero cada uno puede poner en su propia máquina la que
+    quiera, y eso es asunto suyo. Basta con dejar aquí un PNG llamado como el
+    identificador del dispositivo, `046d_c54d.png`, y se usará en su lugar.
+    """
+    from pathlib import Path
+    import os
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "gpx2" / "imagenes"
+
+
+def ruta_imagen_propia(id_str: str):
+    """El fichero que el usuario haya dejado para este dispositivo, si hay."""
+    if not id_str:
+        return None
+    nombre = id_str.replace(":", "_").lower()
+    for extension in (".png", ".jpg", ".jpeg", ".svg", ".webp"):
+        ruta = carpeta_imagenes() / f"{nombre}{extension}"
+        if ruta.is_file():
+            return ruta
+    return None
+
+
+def imagen_propia(id_str: str) -> QIcon | None:
+    """La imagen del usuario como icono, si la hay y se puede leer."""
+    ruta = ruta_imagen_propia(id_str)
+    if ruta is None:
+        return None
+    ico = QIcon(str(ruta))
+    return ico if not ico.isNull() else None
+
+
+def icono_dispositivo(id_str: str, tipo: str = "raton") -> QIcon:
+    """El icono de una entrada de la lista lateral.
+
+    Primero la imagen que haya puesto el usuario; si no, el icono del tema,
+    que en Plasma sale de Breeze y en otro escritorio del suyo.
+    """
+    propia = imagen_propia(id_str)
+    if propia is not None:
+        return propia
+    if tipo == "teclado":
+        return icono("input-keyboard", "keyboard")
+    if tipo == "puntero":
+        return icono("input-mouse-symbolic", "input-mouse", "mouse")
+    return icono("input-mouse", "preferences-desktop-mouse", "mouse")
 
 
 def icono(*nombres: str) -> QIcon:
@@ -579,11 +677,13 @@ class DelegadoDispositivo(QStyledItemDelegate):
     # selección es un gris suave—, así que allí ese blanco quedaba encima de un
     # #dbdbdb y no se leía.
     usa_realce = True
+    LADO_ICONO = 24
 
     def paint(self, painter, option, index):
         opciones = QStyleOptionViewItem(option)
         self.initStyleOption(opciones, index)
         opciones.text = ""
+        opciones.icon = QIcon()     # lo pintamos nosotros, más abajo
         widget = opciones.widget
         estilo = widget.style() if widget else QApplication.style()
         estilo.drawControl(QStyle.ControlElement.CE_ItemViewItem, opciones,
@@ -619,6 +719,19 @@ class DelegadoDispositivo(QStyledItemDelegate):
             return
 
         rect = opciones.rect.adjusted(14, 7, -12, -7)
+
+        # El icono lo pinta el estilo nativo, pero el texto lo pintamos
+        # nosotros: hay que apartarlo o se le echa encima.
+        ico = index.data(Qt.ItemDataRole.DecorationRole)
+        if ico is not None and not ico.isNull():
+            lado = self.LADO_ICONO
+            destino = QRect(rect.x(), rect.y() + (rect.height() - lado) // 2,
+                            lado, lado)
+            modo = (QIcon.Mode.Selected if seleccionado and self.usa_realce
+                    else QIcon.Mode.Normal)
+            ico.paint(painter, destino, Qt.AlignmentFlag.AlignCenter, modo)
+            rect = rect.adjusted(lado + 10, 0, 0, 0)
+
         metrica_ancho = rect.width()
 
         f = QFont(opciones.font)

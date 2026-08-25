@@ -28,6 +28,7 @@ from .widgets import (ColumnaCentrada, DelegadoDispositivo,
                       DiagramaRaton, FilaSlider, FilaSliderLista,
                       icono,
                       ROL_ENCABEZADO, ROL_SUB, Tarjeta, hoja_de_estilo,
+                      icono_dispositivo,
                       pastilla)
 
 ROL_DATOS = Qt.ItemDataRole.UserRole
@@ -924,6 +925,10 @@ class PaginaRaton(QWidget):
         # resto al lateral. Pulsar en uno lleva el foco a su desplegable, para
         # no tener que contar cuál es cuál.
         self._diagrama = DiagramaRaton()
+        # Si el usuario ha dejado una foto de su ratón, se usa en lugar del
+        # esquema. El proyecto no trae ninguna: las de los fabricantes no son
+        # nuestras para redistribuirlas.
+        self._diagrama.poner_imagen(self.raton.id_str)
         self._diagrama.pulsado.connect(self._enfocar_boton)
         t_bot.añadir(self._diagrama)
         for i, b in enumerate(perfil.botones):
@@ -1870,7 +1875,7 @@ class VentanaPrincipal(QMainWindow):
                 info = p.info()
                 pagina = PaginaPuntero(p)
                 self.pila.addWidget(pagina)
-                self._entrada(info.nombre, info.id_str, pagina)
+                self._entrada(info.nombre, info.id_str, pagina, "puntero")
 
         if teclados:
             self._encabezado("Teclados que emulan ratón")
@@ -1878,7 +1883,7 @@ class VentanaPrincipal(QMainWindow):
                 info = p.info()
                 pagina = PaginaPuntero(p)
                 self.pila.addWidget(pagina)
-                self._entrada(info.nombre, info.id_str, pagina)
+                self._entrada(info.nombre, info.id_str, pagina, "teclado")
 
         self._actualizar_vacio(error)
         if self.lista.count():
@@ -1951,11 +1956,13 @@ class VentanaPrincipal(QMainWindow):
         item.setData(ROL_ENCABEZADO, True)
         self.lista.addItem(item)
 
-    def _entrada(self, titulo: str, sub: str, pagina: QWidget) -> None:
+    def _entrada(self, titulo: str, sub: str, pagina: QWidget,
+                 tipo: str = "raton") -> None:
         item = QListWidgetItem(titulo)
         item.setData(ROL_SUB, sub)
         item.setData(ROL_DATOS, pagina)
         item.setToolTip(f"{titulo} — {sub}")
+        item.setIcon(icono_dispositivo(sub, tipo))
         self.lista.addItem(item)
 
     def _seleccion(self, actual: QListWidgetItem | None, _previo=None) -> None:

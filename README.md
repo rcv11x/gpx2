@@ -4,10 +4,15 @@ Control de ratones Logitech en Linux por HID++ 2.0, con perfiles por juego y
 sin telemetría. Pensado para el **G Pro X Superlight 2**, que hoy no está
 soportado por libratbag/Piper.
 
-Estado: **fases 0 a 5 completadas** — detección, protocolo, interfaz, perfiles,
-demonio y cambio automático por juego. Todo probado contra un ratón simulado;
-falta validar dos features contra el hardware real.
-Ver `ARQUITECTURA.md` para el diseño completo y el roadmap.
+Estado: **funcionando y validado contra hardware real**. Detección, DPI, tasa
+de reporte, perfiles por juego, demonio, remapeo de botones y escritura de la
+memoria del ratón. Incluye **8000 Hz por receptor**, que es lo que en Linux no
+se conseguía.
+
+No lleva una lista de modelos: le pregunta al ratón qué sabe hacer y enseña lo
+que haya. Ver **`RATONES.md`** para los que han pasado por aquí y cómo añadir
+el tuyo, `PROTOCOLO.md` para el protocolo con los volcados al lado, y
+`ARQUITECTURA.md` para el diseño.
 
 ## Requisitos
 

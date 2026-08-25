@@ -572,27 +572,18 @@ class PaginaRaton(QWidget):
         from .. import onboard as ob_mod
 
         cap = self.raton.onboard
-        self._perfil_ob = None
-        self._combos_boton = []
 
         cabecera = Tarjeta(
             "Memoria del ratón",
-            "Tu ratón guarda dentro sus propios ajustes: la sensibilidad, la "
-            "frecuencia de sondeo y lo que hace cada botón. Eso sobrevive "
-            "a apagarlo "
-            "y funciona en cualquier ordenador, sin este programa ni ningún otro.")
+            "Tu ratón guarda dentro sus propios ajustes: la sensibilidad y la "
+            "frecuencia de sondeo. Eso sobrevive a apagarlo y funciona en "
+            "cualquier ordenador, sin este programa ni ningún otro. Lo que hace "
+            "cada botón se guarda aquí también, y se cambia en «Botones».")
 
-        try:
-            crudo = cap.leer_sector(1)
-            perfil = ob_mod.leer_perfil(crudo, cap.num_botones, cap.formato)
-        except Exception as e:
-            cabecera.añadir(QLabel(f"No se pudo leer: {e}"))
+        crudo, perfil, error = self._leer_perfil_ob()
+        if error is not None:
+            cabecera.añadir(QLabel(f"No se pudo leer: {error}"))
             return _columna(cabecera)
-        if crudo is None:
-            cabecera.añadir(QLabel("No se pudo leer la memoria de perfiles."))
-            return _columna(cabecera)
-        self._perfil_ob = perfil
-        self._sector_ob = crudo
 
         cabecera.añadir(QLabel(
             f"Guardado ahora mismo: {perfil.tasa_hz} Hz, "
@@ -674,45 +665,6 @@ class PaginaRaton(QWidget):
         btn_niv.clicked.connect(self._guardar_niveles)
         t_niv.añadir(_suelto(btn_niv))
 
-        # -- botones ----------------------------------------------------------
-        t_bot = Tarjeta(
-            "Botones",
-            "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
-            "modo onboard: en modo host manda el firmware y estos ajustes no se "
-            "aplican.")
-        # El esquema es un dibujo genérico de ratón diestro, y se adapta a los
-        # botones que tenga: los seis primeros van a sitios reconocibles y el
-        # resto al lateral. Pulsar en uno lleva el foco a su desplegable, para
-        # no tener que contar cuál es cuál.
-        self._diagrama = DiagramaRaton()
-        self._diagrama.pulsado.connect(self._enfocar_boton)
-        t_bot.añadir(self._diagrama)
-        for i, b in enumerate(perfil.botones):
-            fila = QWidget()
-            lay = QHBoxLayout(fila)
-            lay.setContentsMargins(0, 0, 0, 0)
-            etiqueta = QLabel(f"Botón {i + 1}")
-            etiqueta.setMinimumWidth(90)
-            lay.addWidget(etiqueta)
-            combo = QComboBox()
-            actual = ob_mod.describir_boton(b)
-            for nombre in ob_mod.ACCIONES:
-                combo.addItem(nombre, nombre)
-            if actual not in ob_mod.ACCIONES:
-                # Algo que sabemos leer pero no ofrecer: se enseña y no se pierde.
-                combo.addItem(actual, None)
-            combo.setCurrentText(actual)
-            lay.addWidget(combo, 1)
-            combo.currentIndexChanged.connect(self._refrescar_diagrama)
-            t_bot.añadir(fila)
-            self._combos_boton.append(combo)
-        self._refrescar_diagrama()
-
-        btn_bot = QPushButton(icono("document-save"),
-                              "Guardar los botones en el ratón")
-        btn_bot.clicked.connect(self._guardar_botones)
-        t_bot.añadir(_suelto(btn_bot))
-
         # -- guardar los ajustes de ahora --------------------------------------
         dpi = self.estado.get("dpi")
         rate = self.estado.get("rate")
@@ -738,7 +690,7 @@ class PaginaRaton(QWidget):
         btn_guardar.clicked.connect(self._guardar_ajustes_ob)
         t_guardar.añadir(_suelto(btn_guardar))
 
-        return _columna(cabecera, t_modo, t_niv, t_bot, t_guardar)
+        return _columna(cabecera, t_modo, t_niv, t_guardar)
 
     def _difiere_del_perfil(self, perfil) -> list[str]:
         """Qué tiene el ratón ahora que no coincide con lo que guarda el perfil.
@@ -927,13 +879,100 @@ class PaginaRaton(QWidget):
                 perfil.nivel_por_defecto = i
         self._escribir_perfil_ob(perfil, "los ajustes")
 
-    def _tab_botones(self) -> QWidget:
-        cap = self.raton.buttons
+    def _leer_perfil_ob(self):
+        """El perfil guardado en el ratón, leído una sola vez por pantalla.
+
+        Lo piden dos pestañas —la de botones y la de memoria— y leerlo cuesta
+        dieciséis peticiones al ratón. Se cachea al construir la ventana; para
+        releerlo de verdad se reconstruye la pantalla entera, que es lo que
+        pasa al guardar.
+        """
+        from .. import onboard as ob_mod
+        if getattr(self, "_perfil_ob", None) is not None:
+            return self._sector_ob, self._perfil_ob, None
+        cap = self.raton.onboard
         if cap is None:
+            return None, None, "este ratón no tiene memoria de perfiles"
+        try:
+            crudo = cap.leer_sector(1)
+            if crudo is None:
+                return None, None, "no se pudo leer la memoria de perfiles"
+            perfil = ob_mod.leer_perfil(crudo, cap.num_botones, cap.formato)
+        except Exception as e:
+            return None, None, str(e)
+        self._sector_ob, self._perfil_ob = crudo, perfil
+        return crudo, perfil, None
+
+    def _tarjeta_botones_onboard(self, perfil) -> "Tarjeta":
+        """Los botones tal como los guarda el perfil del propio ratón.
+
+        Vive aquí y no en la pestaña de memoria porque para quien lo usa esto
+        es "cambiar lo que hace un botón", una sola cosa. Que en unos ratones
+        vaya por 0x1B04 y en otros por el perfil onboard es asunto nuestro, no
+        suyo, y no tiene por qué salir en dos sitios distintos.
+        """
+        from .. import onboard as ob_mod
+        self._combos_boton = []
+        t_bot = Tarjeta(
+            "Botones",
+            "Lo que hace cada botón, guardado en el ratón. Sólo tiene efecto en "
+            "modo onboard: en modo host manda el firmware y estos ajustes no se "
+            "aplican.")
+        # El esquema es un dibujo genérico de ratón diestro, y se adapta a los
+        # botones que tenga: los seis primeros van a sitios reconocibles y el
+        # resto al lateral. Pulsar en uno lleva el foco a su desplegable, para
+        # no tener que contar cuál es cuál.
+        self._diagrama = DiagramaRaton()
+        self._diagrama.pulsado.connect(self._enfocar_boton)
+        t_bot.añadir(self._diagrama)
+        for i, b in enumerate(perfil.botones):
+            fila = QWidget()
+            lay = QHBoxLayout(fila)
+            lay.setContentsMargins(0, 0, 0, 0)
+            etiqueta = QLabel(f"Botón {i + 1}")
+            etiqueta.setMinimumWidth(90)
+            lay.addWidget(etiqueta)
+            combo = QComboBox()
+            actual = ob_mod.describir_boton(b)
+            for nombre in ob_mod.ACCIONES:
+                combo.addItem(nombre, nombre)
+            if actual not in ob_mod.ACCIONES:
+                # Algo que sabemos leer pero no ofrecer: se enseña y no se pierde.
+                combo.addItem(actual, None)
+            combo.setCurrentText(actual)
+            lay.addWidget(combo, 1)
+            combo.currentIndexChanged.connect(self._refrescar_diagrama)
+            t_bot.añadir(fila)
+            self._combos_boton.append(combo)
+        self._refrescar_diagrama()
+
+        btn_bot = QPushButton(icono("document-save"),
+                              "Guardar los botones en el ratón")
+        btn_bot.clicked.connect(self._guardar_botones)
+        t_bot.añadir(_suelto(btn_bot))
+        return t_bot
+
+    def _tab_botones(self) -> QWidget:
+        """Cambiar lo que hace cada botón, por la vía que tenga este ratón.
+
+        Hay dos y no se parecen: 0x1B04 reasigna en caliente, y el perfil
+        onboard lo guarda dentro del ratón. Cuál toca es cosa del modelo, no de
+        quien lo usa: aquí sale una sola pestaña y ya se busca ella la vida.
+        """
+        self._combos_boton = []
+        cap = self.raton.buttons
+
+        if cap is None:
+            # Sin 0x1B04, pero casi todos guardan los botones en su perfil.
+            crudo, perfil, error = self._leer_perfil_ob()
+            if perfil is not None and perfil.botones:
+                return _columna(self._tarjeta_botones_onboard(perfil))
+            detalle = (f" ({error})" if error and self.raton.onboard is not None
+                       else "")
             return _columna(Tarjeta(
-                "Botones reprogramables",
-                "Este ratón no permite reasignar sus botones desde el sistema. "
-                "Los configura su propio perfil interno."))
+                "Botones",
+                "Este ratón no deja cambiar lo que hace cada botón, ni desde el "
+                f"sistema ni en su propia memoria{detalle}."))
 
         try:
             controles = cap.controls()

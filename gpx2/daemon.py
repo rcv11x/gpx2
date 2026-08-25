@@ -79,14 +79,32 @@ class Demonio:
         log.info("ratón: %s (%s)", self.raton.nombre, self.raton.conexion)
         return True
 
+    # Cada cuánto se mira. El DPI mucho más a menudo que la conexión: cambia
+    # cuando pulsas el botón del ratón, y avisarte cinco segundos después de
+    # haberlo pulsado no sirve de nada. Peor: si ciclas dos veces seguidas, con
+    # cinco segundos sólo se ve la última y parece que el aviso salga a ratos.
+    CADA_DPI = 1.5
+    CADA_CONEXION = 5.0
+
     async def vigilar_conexion(self) -> None:
         """Reintenta mientras no haya ratón, y detecta que lo has desconectado."""
+        desde_la_ultima = 0.0
         while True:
-            await asyncio.sleep(5)
-            await self.revisar_conexion()
+            await asyncio.sleep(self.CADA_DPI)
+            desde_la_ultima += self.CADA_DPI
+            completa = desde_la_ultima >= self.CADA_CONEXION
+            if completa:
+                desde_la_ultima = 0.0
+            await self.revisar_conexion(completa=completa)
 
-    async def revisar_conexion(self) -> None:
+    async def revisar_conexion(self, completa: bool = True) -> None:
         """Un ciclo de vigilancia. Separado del bucle para poder probarlo.
+
+        En los ciclos cortos sólo se mira el DPI, que es lo que cambia mientras
+        usas el ratón. Buscarlo cuando no está, comprobar el enlace y reponer
+        el perfil son cosas de los ciclos largos: no hace falta hacerlas tres
+        veces más a menudo, y cada una es una petición más por el mismo canal
+        que usa la interfaz.
 
         Distinguir "no contesta" de "no está" es lo que evita que el perfil se
         reaplique solo cada dos por tres: el nodo hidraw es de uno a la vez, y
@@ -94,8 +112,20 @@ class Demonio:
         movido de sitio.
         """
         if self.raton is None:
+            if not completa:
+                return
             if self.buscar_raton():
                 self.aplicar_por_defecto("ratón conectado")
+            return
+
+        if not completa:
+            # Ciclo corto: sólo el DPI. Si el nodo está ocupado, ya se mirará.
+            try:
+                await self._mirar_dpi()
+            except DispositivoOcupado:
+                pass
+            except Exception as e:
+                log.debug("no se pudo mirar el DPI: %s", e)
             return
 
         try:

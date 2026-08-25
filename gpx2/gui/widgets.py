@@ -322,11 +322,43 @@ class DiagramaRaton(QWidget):
     EXTRA_X = 0.05
     EXTRA_DESDE, EXTRA_HASTA = 0.55, 0.80
 
+    # Palabras que dicen dónde cae físicamente un botón del lateral. El orden
+    # del perfil no lo dice: en el PRO X 2 el índice 3 es "Atrás" y el 4
+    # "Adelante", y el dibujo los ponía en ese orden de arriba abajo, o sea
+    # justo al revés de donde están en el ratón. Quien busca el botón de atrás
+    # lo busca detrás.
+    DELANTEROS = ("adelante", "avanzar", "forward")
+    TRASEROS = ("atrás", "atras", "retroceder", "back")
+
+    def _ordenar_laterales(self, sitios):
+        """Coloca los botones del lateral donde caen de verdad en la mano."""
+        laterales = [i for i, (x, _, _) in enumerate(sitios)
+                     if x <= 0.10 and i < len(self.acciones)]
+        if len(laterales) < 2:
+            return sitios
+        alturas = sorted(sitios[i][1] for i in laterales)
+
+        def peso(i: int) -> int:
+            accion = self.acciones[i].lower()
+            if any(p in accion for p in self.DELANTEROS):
+                return 0                      # los de avanzar, delante
+            if any(p in accion for p in self.TRASEROS):
+                return 2                      # los de retroceder, detrás
+            return 1
+
+        # A igualdad, se respeta el orden del perfil.
+        orden = sorted(laterales, key=lambda i: (peso(i), i))
+        sitios = list(sitios)
+        for altura, i in zip(alturas, orden):
+            x, _, lado = sitios[i]
+            sitios[i] = (x, altura, lado)
+        return sitios
+
     def _sitios(self) -> list[tuple[float, float, str]]:
         """Los sitios de los botones que haya, sean cinco o quince."""
         n = len(self.acciones)
         if n <= len(self.SITIOS):
-            return self.SITIOS[:n]
+            return self._ordenar_laterales(self.SITIOS[:n])
         sitios = list(self.SITIOS)
         sobran = n - len(self.SITIOS)
         for i in range(sobran):
@@ -335,7 +367,7 @@ class DiagramaRaton(QWidget):
             t = (i + 1) / (sobran + 1)
             y = self.EXTRA_DESDE + (self.EXTRA_HASTA - self.EXTRA_DESDE) * t
             sitios.append((self.EXTRA_X, y, "izquierda"))
-        return sitios
+        return self._ordenar_laterales(sitios)
 
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -316,6 +316,21 @@ def main() -> int:
     _asyncio.run(d.revisar_conexion())
     comprobar(d.raton is None, "pero tres seguidos sí que es una desconexión")
 
+    # El aviso del DPI llega tarde o no llega si sólo se mira cada cinco
+    # segundos: cambia al pulsar el botón del ratón, y ciclando dos veces
+    # seguidas sólo se vería la última.
+    comprobar(Demonio.CADA_DPI < Demonio.CADA_CONEXION,
+              "el DPI se vigila más a menudo que la conexión")
+    d2 = Demonio(demo=True)
+    d2.buscar_raton()
+    avisos = []
+    d2.avisar = lambda texto, cuerpo="": avisos.append(texto)
+    _asyncio.run(d2.revisar_conexion(completa=False))     # toma la referencia
+    d2.raton.dpi.set(1600)
+    _asyncio.run(d2.revisar_conexion(completa=False))
+    comprobar(any("1600" in a for a in avisos),
+              "avisa del DPI también en los ciclos cortos")
+
     print("10. Robustez")
     from gpx2.features import Firmware
     fw = Firmware(tipo=1, prefijo="BL1", numero=0x71, revision=0x00, build=0x0012)

@@ -1674,6 +1674,16 @@ class PanelPerfiles(QWidget):
 
 
 class VentanaPrincipal(QMainWindow):
+
+    # Cada cuánto mira la interfaz, en milisegundos y en ciclos de ésos.
+    # Los nodos hay que vigilarlos seguido porque enchufar algo tiene que
+    # notarse solo; los ajustes del ratón, cada segundo y medio, que es lo que
+    # tarda en no parecer que la interfaz va por detrás; y la batería, cada
+    # ocho segundos, porque no se mueve en menos.
+    CADA_VIGILANCIA = 800
+    CADA_AJUSTES = 2        # 1,6 s
+    CADA_BATERIA = 10       # 8 s
+
     def __init__(self, demo: bool = False):
         super().__init__()
         self.demo = demo
@@ -1745,7 +1755,7 @@ class VentanaPrincipal(QMainWindow):
         self._escaneando = False
         self._fallos = 0
         self._vigilante = QTimer(self)
-        self._vigilante.setInterval(800)
+        self._vigilante.setInterval(self.CADA_VIGILANCIA)
         self._vigilante.timeout.connect(self._vigilar)
         self._vigilante.start()
 
@@ -1779,16 +1789,27 @@ class VentanaPrincipal(QMainWindow):
             self._rescan.start()          # reinicia la espera si llegan más
             return
 
-        # Cada 5 ciclos (4 s) se relee la batería del ratón que se está viendo.
-        # Además de mantener el porcentaje al día, es la única forma de notar
-        # que el ratón se ha apagado con su interruptor: eso no quita ningún
-        # nodo del sistema, así que la vigilancia de arriba no lo ve. No se
-        # puede escuchar la notificación que manda el ratón porque el canal se
-        # abre sólo durante cada petición, y eso es a propósito.
+        # Dos ritmos distintos, porque las dos cosas no cambian igual de rápido.
+        #
+        # El DPI cambia cuando pulsas el botón del ratón, y verlo cuatro
+        # segundos después se nota como que la interfaz va por detrás. La
+        # batería no se mueve en cuatro segundos ni en cuatro minutos.
+        #
+        # Releer no es gratis: son peticiones por el mismo canal que usa el
+        # demonio, y cuantas más, más se pisan. Por eso sólo se acelera lo que
+        # lo necesita.
         self._ciclos += 1
-        if self._ciclos % 5:
-            return
         pagina = self.pila.currentWidget()
+        if self._ciclos % self.CADA_AJUSTES == 0 and isinstance(pagina, PaginaRaton):
+            pagina.refrescar_ajustes()
+
+        # Además de mantener el porcentaje al día, releer la batería es la
+        # única forma de notar que el ratón se ha apagado con su interruptor:
+        # eso no quita ningún nodo del sistema, así que la vigilancia de arriba
+        # no lo ve. No se puede escuchar la notificación que manda el ratón
+        # porque el canal se abre sólo durante cada petición, y es a propósito.
+        if self._ciclos % self.CADA_BATERIA:
+            return
         if isinstance(pagina, PaginaRaton):
             if not pagina.refrescar_bateria():
                 # El demonio consulta el ratón cada cinco segundos y nosotros
@@ -1801,9 +1822,6 @@ class VentanaPrincipal(QMainWindow):
                     self.escanear(silencioso=True)
                 return
             self._fallos = 0
-            # El demonio puede haber cambiado de perfil, o el ratón haber
-            # vuelto a los suyos al despertarse: que se vea.
-            pagina.refrescar_ajustes()
             return
 
         # Sin ningún ratón HID++ a la vista. Hay que seguir mirando: encender

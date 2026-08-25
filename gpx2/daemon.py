@@ -50,6 +50,7 @@ class Demonio:
         # Pings fallidos seguidos. Por radio se pierde alguno de vez en cuando,
         # y uno solo no puede significar "lo has desconectado".
         self._fallos_seguidos = 0
+        self._aviso_fallido = False
         self.jugando: dict[int, str] = {}      # pid -> id de perfil aplicado
         self._pids: set[int] = set()           # visto por CUALQUIER vigilante
         self.servicio = None                   # interfaz D-Bus, para las señales
@@ -97,6 +98,28 @@ class Demonio:
                 desde_la_ultima = 0.0
             await self.revisar_conexion(completa=completa)
 
+    async def _sigue_ahi(self) -> bool:
+        """Si el ratón responde. Reintenta, porque el canal es compartido.
+
+        Medido con la interfaz abierta: uno de cada cuatro pings se pierde. No
+        es que el ratón tarde —cuando el canal está libre contesta en 6 ms— es
+        que la interfaz y el demonio se pisan sobre el mismo nodo. Un intento
+        suelto no dice nada; dos seguidos ya sí.
+
+        Que el nodo esté ocupado es prueba de que el ratón existe: alguien está
+        hablando con él.
+        """
+        for intento in range(2):
+            try:
+                if self.raton.hpp.ping(timeout=1.0):
+                    return True
+            except DispositivoOcupado:
+                return True
+            except Exception as e:
+                log.debug("ping fallido (%d de 2): %s", intento + 1, e)
+            await asyncio.sleep(0.2)
+        return False
+
     async def revisar_conexion(self, completa: bool = True) -> None:
         """Un ciclo de vigilancia. Separado del bucle para poder probarlo.
 
@@ -128,23 +151,13 @@ class Demonio:
                 log.debug("no se pudo mirar el DPI: %s", e)
             return
 
-        try:
-            # `estado()` se traga los errores para poder pintar la interfaz
-            # aunque falle un ajuste, así que no sirve para saber si el ratón
-            # sigue ahí: hay que preguntárselo.
-            if not self.raton.hpp.ping(timeout=0.5):
-                raise OSError("sin respuesta")
-        except DispositivoOcupado:
-            # El nodo lo tiene otro proceso, normalmente la interfaz. Eso NO es
-            # que el ratón se haya ido: es que está ocupado medio segundo.
-            # Darlo por perdido hacía que al recuperarlo se reaplicara el
-            # perfil, y con la ventana abierta —que mira cada 800 ms— eso
-            # pasaba decenas de veces por hora.
-            return
-        except Exception:
+        # `estado()` se traga los errores para poder pintar la interfaz aunque
+        # falle un ajuste, así que no sirve para saber si el ratón sigue ahí.
+        if not await self._sigue_ahi():
             self._fallos_seguidos += 1
-            # Un fallo suelto no es una desconexión: por radio se pierde un
-            # paquete de vez en cuando. Tres oportunidades antes de darlo por ido.
+            # Y aun con reintento, tres ciclos seguidos antes de darlo por ido:
+            # equivocarse aquí significa reaplicar el perfil y pisarle al
+            # usuario el DPI que acababa de poner.
             if self._fallos_seguidos < 3:
                 log.debug("el ratón no ha contestado (%d de 3)",
                           self._fallos_seguidos)
@@ -222,6 +235,10 @@ class Demonio:
         except Exception:
             return
         if self._dpi_visto is not None and ahora != self._dpi_visto:
+            # A INFO y no a debug: si el aviso no sale, esta línea es lo único
+            # que dice si el demonio llegó a ver el cambio o ni se enteró, y
+            # sin ella no hay forma de saber cuál de las dos cosas falla.
+            log.info("el DPI ha cambiado solo: %s → %s", self._dpi_visto, ahora)
             await self.avisar(f"{ahora} DPI", "Sensibilidad del ratón")
         self._dpi_visto = ahora
 
@@ -364,7 +381,15 @@ class Demonio:
                 "gpx2", self._id_aviso, "input-mouse", texto, cuerpo, [],
                 {}, 2500)
         except Exception as e:
-            log.debug("no se pudo avisar al escritorio: %s", e)
+            # La primera vez a WARNING: un escritorio sin servicio de avisos es
+            # normal y no hay que llenarle el registro, pero enterarse de que
+            # no salen nunca tiene que ser posible sin activar el modo verboso.
+            if not self._aviso_fallido:
+                self._aviso_fallido = True
+                log.warning("no se pudo avisar al escritorio (%s). No se "
+                            "volverá a repetir este mensaje.", e)
+            else:
+                log.debug("no se pudo avisar al escritorio: %s", e)
 
     async def _publicar_dbus(self) -> None:
         try:

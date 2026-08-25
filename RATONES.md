@@ -74,8 +74,9 @@ y es el que ejercita todo el camino "clásico".
 | `0x01` | color fijo, RGB en los bytes 1-3 — confirmado escribiendo rojo y azul |
 | `0x04` | arcoíris en movimiento — confirmado |
 | byte 10 | velocidad: a más valor, más lento — confirmado en las dos direcciones |
+| bytes 7 y 8 | también afectan a la velocidad; encajan como un `u16` en little-endian, sin cerrar |
 | `0x03`, `0x0A`, `0x0D`, `0x0E` | sin identificar |
-| el brillo | sin localizar |
+| el brillo | sin localizar: en la primera tanda sólo se probaron los bytes que no estaban a cero, y puede estar en uno de los que sí |
 
 **No tiene:**
 

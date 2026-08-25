@@ -573,6 +573,13 @@ class DelegadoDispositivo(QStyledItemDelegate):
     ALTO_ITEM = 50
     ALTO_ENCABEZADO = 30
 
+    # Si la lista pinta su selección con el color de realce, el texto va del
+    # color que le toca encima (blanco en un tema claro). La lista de perfiles
+    # NO lo hace —ahí el realce está reservado al perfil que manda, y la
+    # selección es un gris suave—, así que allí ese blanco quedaba encima de un
+    # #dbdbdb y no se leía.
+    usa_realce = True
+
     def paint(self, painter, option, index):
         opciones = QStyleOptionViewItem(option)
         self.initStyleOption(opciones, index)
@@ -587,7 +594,8 @@ class DelegadoDispositivo(QStyledItemDelegate):
         es_cabecera = bool(index.data(ROL_ENCABEZADO))
         seleccionado = bool(opciones.state & QStyle.StateFlag.State_Selected)
 
-        base = (opciones.palette.highlightedText().color() if seleccionado
+        base = (opciones.palette.highlightedText().color()
+                if seleccionado and self.usa_realce
                 else opciones.palette.text().color())
         painter.save()
 

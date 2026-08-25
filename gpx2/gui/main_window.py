@@ -540,10 +540,11 @@ class PaginaRaton(QWidget):
             # El ratón no informa de la tasa que tiene puesta: su función de
             # lectura sigue devolviendo la anterior. Se enseña lo último que
             # hemos escrito, y se dice cómo comprobarlo de verdad.
-            nota = QLabel("El ratón no informa de la frecuencia que tiene puesta, "
-                          "así que aquí se muestra la última que se le ha "
-                          "pedido. Para medir la de verdad: "
-                          "python3 depurar.py --medir")
+            nota = QLabel("Tu ratón no informa de la frecuencia que tiene "
+                          "puesta, así que aquí se ve la última que se le pidió.")
+            nota.setToolTip("Para medirla de verdad, cronometrando los informes "
+                            "que llegan al sistema:\n"
+                            "python3 depurar.py --medir")
             nota.setObjectName("Suave")
             nota.setWordWrap(True)
             t.añadir(nota)
@@ -1091,12 +1092,9 @@ class PaginaRaton(QWidget):
 
         estado = firmware.resumen()
         t2 = Tarjeta("Actualizar: lo hace fwupd, no este programa",
-                     "fwupd es la herramienta estándar de Linux para firmware. "
-                     "Descarga imágenes firmadas desde LVFS, implementa el modo "
-                     "DFU de HID++ y tiene ruta de recuperación si algo se "
-                     "corta. Reimplementar eso aquí sería la única parte del "
-                     "proyecto capaz de dejarte el ratón inservible, así que no "
-                     "se hace.")
+                     "fwupd es la herramienta estándar de Linux para firmware: "
+                     "descarga imágenes firmadas y tiene ruta de recuperación "
+                     "si algo se corta a media.")
         t2.añadir(QLabel(estado["mensaje"]))
         for d in estado.get("dispositivos", []):
             marca = "actualizable" if d["actualizable"] else "sin actualizaciones disponibles"
@@ -1117,13 +1115,10 @@ class PaginaRaton(QWidget):
         if not estado.get("dispositivos"):
             tarjetas.append(Tarjeta(
                 "Si fwupd no reconoce tu ratón",
-                "Entonces hoy no se puede actualizar el firmware desde Linux de "
-                "forma segura, y el camino útil no es escribir un flasheador "
-                "propio: es añadir el dispositivo a fwupd, que es software libre "
-                "y acepta contribuciones. Hace falta el identificador del "
-                "dispositivo y alguien con el hardware para probar — o sea, tú. "
-                "Mientras tanto queda la herramienta web oficial de Logitech, "
-                "que funciona en Chrome sobre Linux con WebHID."))
+                "Queda la herramienta web oficial de Logitech, que funciona en "
+                "Chrome sobre Linux. Y si quieres arreglarlo para todos, fwupd "
+                "es software libre y acepta que se le añadan dispositivos: hace "
+                "falta el identificador del tuyo y alguien que pueda probarlo."))
         return _columna(*tarjetas)
 
     def _tab_diagnostico(self) -> QWidget:
@@ -1151,9 +1146,9 @@ class PaginaRaton(QWidget):
         t.añadir(tabla)
 
         t2 = Tarjeta("Respuestas del ratón, sin interpretar",
-                     "Para las features aún sin validar (0x2202, 0x8061), esto "
-                     "muestra la respuesta byte a byte. Es la herramienta con la "
-                     "que se corrige el decodificador sin adivinar nada.")
+                     "La respuesta byte a byte a lo que se le pregunte. Es con "
+                     "lo que se descifra una feature nueva sin adivinar nada, y "
+                     "lo que hay que mandar si tu ratón hace algo raro.")
         salida = QPlainTextEdit()
         salida.setReadOnly(True)
         salida.setMinimumHeight(160)
@@ -1403,42 +1398,62 @@ class PanelPerfiles(QWidget):
         self.aviso.añadir(self.aviso_texto)
         raiz.addWidget(self.aviso)
 
+        # La ruta iba aquí y era ruido: ocupa una línea entera y quien quiera
+        # llegar a ella tiene el botón de abrir la carpeta al lado.
         tarjeta = Tarjeta("Perfiles",
-                          "El que lleva ⬢ es el que manda ahora. "
-                          "Selecciona uno y pulsa Aplicar, o haz doble clic. "
-                          "Cada perfil es un fichero TOML en "
-                          f"{self.almacen.dir}, editable a mano.")
+                          "El que lleva ⬢ es el que manda ahora. Selecciona "
+                          "uno y pulsa Aplicar, o haz doble clic.")
         self.lista = QListWidget()
         # Nombre propio: el estilo de la lista lateral pinta la selección con
         # el color de realce a todo lo ancho, y aquí ese color tiene que ser
         # para el perfil que MANDA, no para el que está seleccionado.
         self.lista.setObjectName("ListaPerfiles")
-        self.lista.setItemDelegate(DelegadoDispositivo(self.lista))
+        delegado = DelegadoDispositivo(self.lista)
+        delegado.usa_realce = False     # aquí la selección no es el azul
+        self.lista.setItemDelegate(delegado)
         self.lista.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.lista.setMinimumHeight(220)
+        self.lista.setMinimumHeight(150)
         self.lista.itemDoubleClicked.connect(lambda _: self._aplicar())
         tarjeta.añadir(self.lista)
 
+        # Aplicar es lo que se hace casi siempre, así que va primero y marcado
+        # como el principal. Antes estaban los seis en fila con el mismo peso,
+        # y "Borrar" se veía igual de invitador que "Aplicar".
         botones = QHBoxLayout()
-        for texto, nombres, accion in (
-                ("Aplicar", ("dialog-ok-apply", "dialog-ok"), self._aplicar),
-                ("Crear desde el estado actual", ("list-add", "document-new"),
-                 self._crear),
+        principal = QPushButton(icono("dialog-ok-apply", "dialog-ok"), "Aplicar")
+        principal.setDefault(True)
+        principal.clicked.connect(self._aplicar)
+        botones.addWidget(principal)
+
+        for texto, nombres, accion, ayuda in (
+                ("Nuevo", ("list-add", "document-new"), self._crear,
+                 "Crea un perfil con lo que el ratón tiene puesto ahora mismo"),
                 ("Juegos…", ("applications-games", "preferences-desktop-gaming"),
-                 self._editar_juegos),
-                ("Por defecto", ("emblem-favorite", "bookmarks"),
-                 self._por_defecto),
-                ("Borrar", ("edit-delete", "list-remove"), self._borrar)):
+                 self._editar_juegos,
+                 "Elige con qué juegos se aplica solo este perfil"),
+                ("Marcar como inicial", ("emblem-favorite", "bookmarks"),
+                 self._por_defecto,
+                 "Este será el perfil que se aplique cuando no haya ningún "
+                 "juego abierto")):
             b = QPushButton(icono(*nombres), texto)
+            b.setToolTip(ayuda)
             b.clicked.connect(accion)
             botones.addWidget(b)
+
         botones.addStretch(1)
+        # Las dos que no son de uso diario, apartadas a la derecha: abrir la
+        # carpeta y, la última de todas, borrar.
         abrir = QPushButton(icono("folder-open", "document-open-folder"),
                             "Abrir carpeta")
+        abrir.setToolTip(f"Los perfiles son ficheros TOML en {self.almacen.dir},"
+                         " editables a mano")
         abrir.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.almacen.dir))))
         botones.addWidget(abrir)
+        borrar = QPushButton(icono("edit-delete", "list-remove"), "Borrar")
+        borrar.clicked.connect(self._borrar)
+        botones.addWidget(borrar)
         tarjeta.añadir_layout(botones)
         raiz.addWidget(tarjeta)
         raiz.addStretch(1)

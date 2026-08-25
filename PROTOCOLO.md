@@ -466,7 +466,29 @@ daba resultados engañosos: el `0x03` y el `0x04` salían rojo fijo, el `0x0A` y
 el `0x0D` apagados, y el `0x0E` parpadeando. Eso dice que necesitan
 parámetros, no qué son.
 
-**Sin decodificar todavía**: cuál de los bytes 4 a 10 es la velocidad y cuál el
-brillo. En el G203 sólo tres no están a cero: el 7 (`0x40`), el 8 (`0x01`) y el
-10 (`0x1F`). `depurar.py --afinar-luces` los varía de uno en uno y pregunta qué
-cambia.
+### Qué hace cada byte de parámetro
+
+Variándolos de uno en uno sobre el arcoíris del G203 (`--afinar-luces`):
+
+| byte | qué hace | cómo se sabe |
+|------|----------|--------------|
+| 10 | **periodo**: a más valor, más lento | `0x1F`→`0x7C` frenó, `0x1F`→`0x07` aceleró |
+| 8 | afecta a la velocidad; subirlo casi lo para | `0x01`→`0x04` "se detuvo el movimiento" |
+| 7 | afecta a la velocidad | `0x40`→`0xFF` "más lento" |
+| 4, 5, 6, 9 | a cero en este ratón; sin probar | — |
+
+El **10 es el único cerrado**, porque se comprobó en las dos direcciones. Los
+bytes 7 y 8 encajan como un `u16` **little-endian**: `40 01` son 320, subir el
+7 a `0xFF` da 511 (más lento) y subir el 8 a `0x04` da 1088 ("se detuvo"). Pero
+bajar el 7 a `0x10` —272, que debería acelerar un poco— se describió como "más
+brillante", así que no está cerrado.
+
+**El brillo no aparece por ningún lado**, y la primera tanda tenía la culpa:
+sólo variaba los bytes que no estaban a cero, y un cero puede significar "por
+defecto". La segunda tanda prueba también los bytes 4, 5, 6 y 9.
+
+Aviso sobre el método, que costó una ronda: al preguntar "qué ha cambiado" hay
+que **volver siempre al efecto de partida entre una variación y la siguiente**.
+Si no, cada respuesta se compara con la variación anterior en vez de con una
+referencia fija, y salen contradicciones que no son del ratón sino de la
+pregunta.

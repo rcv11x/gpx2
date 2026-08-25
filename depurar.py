@@ -1093,7 +1093,12 @@ def describir_efecto(b: bytes) -> str:
     # pensar que el efecto era negro.
     if tipo == 0x01:
         return f"{etiqueta} #{b[1]:02X}{b[2]:02X}{b[3]:02X}"
-    return f"{etiqueta}   parámetros: {b[4:].hex(' ')}"
+    # El byte 10 es el periodo: subirlo frena el efecto y bajarlo lo acelera,
+    # comprobado en las dos direcciones. Los bytes 7 y 8 también afectan a la
+    # velocidad —encajan como un u16 en little-endian— pero eso aún no está
+    # confirmado del todo.
+    return (f"{etiqueta}   velocidad {b[10]} (a más, más lento)"
+            f"   ·   resto: {b[4:10].hex(' ')}")
 
 
 def bloque_informe(s: Sonda, ruta: str, nodo, segundos: float = 0.0) -> None:
@@ -1591,9 +1596,11 @@ def bloque_afinar_luces(s: Sonda, sector: int, ruta_copia: str) -> None:
     print(f"  Efecto de partida: {base.hex(' ')}")
     print(f"                     {describir_efecto(base)}")
     print()
-    print("  Voy a cambiar un byte cada vez y preguntarte qué ha cambiado")
-    print("  RESPECTO A LO ANTERIOR: más rápido, más lento, más brillante,")
-    print("  más tenue, otro color, igual que antes...")
+    print("  Voy a poner tu efecto de siempre, dejarlo unos segundos, y luego")
+    print("  cambiar UN byte. Dime en qué se diferencia del de siempre.")
+    print()
+    print("  Responde con lo que veas: más rápido, más lento, más brillante,")
+    print("  más tenue, otro color, se para, parpadea, igual...")
     print()
     try:
         input("  Enter para empezar, o Ctrl-C para dejarlo: ")
@@ -1608,28 +1615,43 @@ def bloque_afinar_luces(s: Sonda, sector: int, ruta_copia: str) -> None:
 
     # Se prueban los bytes que no están a cero en el original: los que el ratón
     # usa de verdad. Cada uno, a un valor mucho mayor y a uno mucho menor.
-    interesantes = [i for i in range(4, 11) if base[i]]
-    pruebas: list[tuple[bytes, str]] = [(base, "el que tenías, sin tocar (control)")]
-    for pos in interesantes:
+    pruebas: list[tuple[bytes, str]] = []
+    for pos in range(4, 11):
         v = base[pos]
-        for nuevo_v, como in ((min(0xFF, v * 4), "x4"), (v // 4, "÷4")):
-            # Un valor que sale igual al que ya había no es una prueba: sería
-            # preguntarle a alguien qué ha cambiado cuando no ha cambiado nada.
-            if nuevo_v == v or nuevo_v == 0:
-                continue
-            pruebas.append((variar(pos, nuevo_v),
-                            f"byte {pos}: de 0x{v:02X} a 0x{nuevo_v:02X} ({como})"))
+        if v:
+            # Los bytes que el ratón usa: se suben y se bajan mucho.
+            for nuevo_v, como in ((min(0xFF, v * 4), "x4"), (v // 4, "÷4")):
+                # Un valor que sale igual al que ya había no es una prueba:
+                # sería preguntar qué ha cambiado cuando no ha cambiado nada.
+                if nuevo_v == v or nuevo_v == 0:
+                    continue
+                pruebas.append((variar(pos, nuevo_v),
+                                f"byte {pos}: de 0x{v:02X} a 0x{nuevo_v:02X} ({como})"))
+        else:
+            # Y los que están a cero también hay que probarlos. Un cero puede
+            # significar "por defecto", y el brillo podría estar escondido en
+            # uno de ellos: la primera tanda sólo miró los que no eran cero, y
+            # por eso no apareció por ninguna parte.
+            pruebas.append((variar(pos, 0x40),
+                            f"byte {pos}: de 0x00 a 0x40 (estaba a cero)"))
 
     respuestas: list[tuple[str, str]] = []
     try:
         for bloque, etiqueta in pruebas:
-            if not _escribir_efecto(s, sector, original, bloque, tam):
-                print(f"     {etiqueta}: no se pudo escribir, se salta")
-                continue
+            # Antes de cada prueba se vuelve al de siempre. Sin esto, cada
+            # respuesta se compara con la variación anterior en vez de con una
+            # referencia fija, y salen contradicciones que no son del ratón
+            # sino de la pregunta: pasó en la primera tanda.
+            _escribir_efecto(s, sector, original, base, tam)
             print(f"\n  --- {etiqueta} ---")
-            print(f"      {bloque.hex(' ')}")
+            print("      (mirando el de siempre…)", end="", flush=True)
+            time.sleep(4)
+            if not _escribir_efecto(s, sector, original, bloque, tam):
+                print("\r      no se pudo escribir, se salta            ")
+                continue
+            print(f"\r      ahora: {bloque.hex(' ')}")
             try:
-                visto = input("     ¿Qué ha cambiado? ").strip()
+                visto = input("     ¿En qué se diferencia del de siempre? ").strip()
             except (KeyboardInterrupt, EOFError):
                 print("\n  Cortado por el usuario.")
                 break
